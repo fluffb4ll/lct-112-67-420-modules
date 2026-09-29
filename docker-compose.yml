@@ -1,0 +1,101 @@
+name: dds-trainer
+
+services:
+  # База данных PostgreSQL для бэкенда
+  postgres:
+    image: postgres:18-alpine
+    container_name: postgres_lct
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dds_db
+      POSTGRES_USER: ${POSTGRES_USER:-dds_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dds_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-dds_user} -d dds_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dds-network
+
+  # ИИ-контур (Python HTTP-сервис)
+  ai:
+    build:
+      context: ./ai
+      dockerfile: Dockerfile
+    image: ${DOCKER_REGISTRY:-}${DOCKER_REGISTRY:+/}dds-ai:${IMAGE_TAG:-latest}
+    container_name: dds-ai
+    restart: unless-stopped
+    environment:
+      DDS_AI_PORT: 8090
+      DDS_LLM_MODEL_PATH: ${DDS_LLM_MODEL_PATH:-/models/model.gguf}
+    ports:
+      - "${AI_PORT:-8090}:8090"
+    volumes:
+      - ai_models:/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"DDS_AI_PORT\"]}/health', timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - dds-network
+
+  # Основной HTTP-бэкенд (Spring Boot)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: ${DOCKER_REGISTRY:-}${DOCKER_REGISTRY:+/}dds-backend:${IMAGE_TAG:-latest}
+    container_name: dds-backend
+    restart: unless-stopped
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/dds_db
+      DB_USER: ${POSTGRES_USER:-dds_user}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-dds_password}
+      PEPPER: ${PEPPER:-supersecretpepper123!}
+      SADMIN_USERNAME: ${SADMIN_USERNAME:-admin}
+      SADMIN_PASSWORD: ${SADMIN_PASSWORD:-admin123}
+      AI_SERVICE_URL: http://ai:8090
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai:
+        condition: service_healthy
+    networks:
+      - dds-network
+
+  # Фронтенд (Nginx + Vite SPA)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ${DOCKER_REGISTRY:-}${DOCKER_REGISTRY:+/}dds-frontend:${IMAGE_TAG:-latest}
+    container_name: dds-frontend
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8080
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - dds-network
+
+volumes:
+  postgres_data:
+    driver: local
+  ai_models:
+    driver: local
+
+networks:
+  dds-network:
+    driver: bridge
