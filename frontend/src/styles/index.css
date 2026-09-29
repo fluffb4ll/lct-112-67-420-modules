@@ -1,0 +1,106 @@
+@import "tailwindcss";
+
+/*
+ * Токены цветов. Всё приложение говорит на визуальном языке АРМ-112.
+ *  arm-*  — сняты пипеткой со скриншотов реального АРМ-112 (учебный стенд ГБУ «Система 112»).
+ *  t-*    — учебный слой поверх эмулятора (те же цвета АРМ: тёмные панели, синий, оранжевый).
+ *  c-*    — кабинеты: фон экрана карточки, светлые блоки, синий акцент — как в АРМ.
+ */
+@theme {
+  --font-sans: "Roboto", "Segoe UI", Arial, sans-serif;
+
+  --color-arm-journal: #838f97;
+  --color-arm-search: #ebecec;
+  --color-arm-dark: #2f353a;
+  --color-arm-sub: #49555d;
+  --color-arm-card: #c9ced1;
+  --color-arm-block: #efefef;
+  --color-arm-type: #303335;
+  --color-arm-blue: #157dbd;
+  --color-arm-blue-hover: #1170ab;
+  --color-arm-orange: #ec653b;
+  --color-arm-oper: #6c364b;
+  --color-arm-text: #222629;
+  --color-arm-muted: #6f777d;
+  --color-arm-line: #b9bfc3;
+
+  --color-t-bar: #2f353a;
+  --color-t-panel: #49555d;
+  --color-t-line: #5d6a73;
+  --color-t-accent: #157dbd;
+  --color-t-warn: #ec653b;
+  --color-t-bad: #ff0000;
+
+  --color-c-bg: #c9ced1;
+  --color-c-surface: #efefef;
+  --color-c-line: #b9bfc3;
+  --color-c-text: #222629;
+  --color-c-muted: #5f676d;
+  --color-c-accent: #157dbd;
+  --color-c-accent-soft: #d5e5f1;
+  --color-c-ok: #2e7d32;
+  --color-c-ok-soft: #dcebdd;
+  --color-c-warn: #b3471f;
+  --color-c-warn-soft: #f7e0d6;
+  --color-c-bad: #c62828;
+  --color-c-bad-soft: #f3d9d9;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--color-c-text);
+  background: var(--color-c-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+}
+
+/* Подсветка элемента в режиме «делай как я» — оранжевым, как фокус на кнопке ✓ формы статуса АРМ */
+@keyframes step-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(236, 101, 59, 1), 0 0 0 8px rgba(236, 101, 59, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(236, 101, 59, 1), 0 0 0 13px rgba(236, 101, 59, 0.05);
+  }
+}
+.step-ring {
+  animation: step-pulse 1.4s ease-in-out infinite;
+}
+
+/* Появление новой строки в журнале */
+@keyframes row-arrive {
+  from {
+    background-color: #5d7f96;
+  }
+  to {
+    background-color: var(--color-arm-dark);
+  }
+}
+.row-arrive {
+  animation: row-arrive 2.5s ease-out;
+}
+
+/* Печать отчётов преподавателя: прячем навигацию */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+}
