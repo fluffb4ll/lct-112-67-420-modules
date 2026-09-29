@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: lct-112-67-420-http-backend
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 15
+      minimum-idle: 5
+      connection-timeout: 5000
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 100
+        order_inserts: true
+        order_updates: true
+        batch_versioned_data: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+    open-in-view: false
+  jackson:
+    default-property-inclusion: non_null
+
+app:
+  security:
+    pepper: ${PEPPER}
+    auth:
+      token-expiration-hrs: 1
+      token-expiration-mins: 0
+    init:
+      admin-username: ${SADMIN_USERNAME:admin}
+      admin-password: ${SADMIN_PASSWORD:}
+    token-cleanup:
+      delay: ${TOKEN_CLEANUP_DELAY:30m}
+      init-delay: ${TOKEN_CLEANUP_INIT_DELAY:1m}
+  ai:
+    service-url: ${AI_SERVICE_URL:http://localhost:8000}
+    connect-timeout-ms: 5000
+    read-timeout-ms: 30000
