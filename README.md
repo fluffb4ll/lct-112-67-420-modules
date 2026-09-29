@@ -6,6 +6,8 @@
 2. **`backend`** — Основной HTTP-бэкенд (Java 25 / Spring Boot), порт `8080`.
 3. **`frontend`** — Веб-интерфейс (React / Vite / Nginx), порт `80`.
 
+Инструкция пользователя приведена в файле [`USER_GUIDE.md`](USER_GUIDE.md)
+
 ---
 
 ## 🚀 Быстрый старт с Docker Compose
