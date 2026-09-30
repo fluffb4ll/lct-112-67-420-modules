@@ -10,6 +10,10 @@
 
 Демо-стенд: http://93.77.165.200:80
 
+Администратор: admin/admin123
+Преподаватель: i.ivanov/teacher123
+Обучающийся: v.pupkin/student1337
+
 ---
 
 ## 🚀 Быстрый старт с Docker Compose
