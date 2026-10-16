@@ -28,7 +28,7 @@ public class AuthController {
         Duration maxAge = Duration.between(OffsetDateTime.now(), loginDto.expiresAt());
         ResponseCookie authCookie = ResponseCookie.from("AUTH_TOKEN", loginDto.token().toString())
                 .httpOnly(true)
-                .secure(true)
+                .secure(false)
                 .path("/")
                 .maxAge(maxAge)
                 .sameSite("Lax")
