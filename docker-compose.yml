@@ -91,7 +91,7 @@ services:
       - dds-network
 
 volumes:
-  postgres_data:
+  pgdata:
     driver: local
   ai_models:
     driver: local
