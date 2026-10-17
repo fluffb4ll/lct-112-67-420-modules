@@ -165,25 +165,30 @@ public class SessionService {
         List<UUID> pool = new ArrayList<>(assignedScenarioIds);
         Collections.shuffle(pool, random);
 
-        int count = Math.min(targetCount, pool.size());
-        List<UUID> studentScenarios = pool.subList(0, count);
-
-        List<ScenarioEntity> scenarioEntities = scenarioRepository.findAllById(studentScenarios);
+        List<ScenarioEntity> scenarioEntities = scenarioRepository.findAllById(pool);
         Map<UUID, ScenarioEntity> entityMap = new HashMap<>();
         for (ScenarioEntity se : scenarioEntities) {
             entityMap.put(se.getId(), se);
         }
 
+        // сценарий могли снять с занятий уже после старта (архив, возврат в черновики, удаление):
+        // обучающемуся его больше не выдаём, место в плане занимает следующий из перемешанного пула.
+        // Уже сданную карточку оставляем — обучающийся её видел
+        long deliverableCount = pool.stream()
+                .filter(id -> isDeliverable(entityMap.get(id), submittedScenarioToCardMap.containsKey(id)))
+                .count();
+        int effectiveTargetCount = (int) Math.min(targetCount, deliverableCount);
+
         List<IncomingCardDto> incomingCards = new ArrayList<>();
         int currentOffset = 0;
-        int withdrawnCount = 0;
+        int deliveredCount = 0;
         Integer nextCardInSeconds = null;
 
-        for (int i = 0; i < studentScenarios.size(); i++) {
-            UUID sId = studentScenarios.get(i);
+        for (int i = 0; i < pool.size() && deliveredCount < effectiveTargetCount; i++) {
+            UUID sId = pool.get(i);
             ScenarioEntity scenario = entityMap.get(sId);
-            if (scenario == null) continue;
 
+            // интервал считаем и для снятого сценария: время прихода остальных карточек не сдвигается
             if (i > 0) {
                 int interval = minInterval + random.nextInt(Math.max(1, maxInterval - minInterval + 1));
                 currentOffset += interval;
@@ -193,13 +198,8 @@ public class SessionService {
             boolean isSubmitted = submittedScenarioToCardMap.containsKey(sId);
             UUID submittedCardId = submittedScenarioToCardMap.get(sId);
 
-            // сценарий сняли с занятий (архив) или вернули в черновики уже после старта:
-            // обучающемуся его больше не выдаём и из плана занятия исключаем. Интервал выше уже
-            // учтён, поэтому время прихода остальных карточек не сдвигается
-            if (scenario.getStatus() != ScenarioStatus.APPROVED && !isSubmitted) {
-                withdrawnCount++;
-                continue;
-            }
+            if (!isDeliverable(scenario, isSubmitted)) continue;
+            deliveredCount++;
 
             if (hasArrived) {
                 // Notice: callerProfile is strictly excluded from client DTO
@@ -220,7 +220,6 @@ public class SessionService {
             }
         }
 
-        int effectiveTargetCount = targetCount - withdrawnCount;
         boolean isSessionCompleted = submittedCards.size() >= effectiveTargetCount || session.getEndedAt() != null;
 
         return new IncomingCardsStreamDto(
@@ -324,6 +323,11 @@ public class SessionService {
         Page<SessionDto> dtoPage = resultPage.map(SessionDto::fromEntity);
 
         return PageResponseDto.from(dtoPage);
+    }
+
+    /** Карточку выдаём, если сценарий утверждён или обучающийся уже сдал по нему карточку */
+    private static boolean isDeliverable(ScenarioEntity scenario, boolean isSubmitted) {
+        return scenario != null && (scenario.getStatus() == ScenarioStatus.APPROVED || isSubmitted);
     }
 
     private void verifyTeacherOrAdmin(UserEntity user) throws AuthenticationException {

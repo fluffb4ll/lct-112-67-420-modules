@@ -96,7 +96,7 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
   const [grammar, setGrammar] = useState<string[] | null>(null);
   const [askDelete, setAskDelete] = useState(false);
   const [busy, setBusy] = useState(false);
-  // сценарий получен с сервера: управлять статусом можно и без локальной копии
+  // сценарий получен с сервера: управлять статусом можно и без локальной копии, но не раньше
   const [loaded, setLoaded] = useState(false);
   // категории происшествий с сервера: бэкенд требует их id при сохранении сценария
   const [serverCategories, setServerCategories] = useState<IncidentCategory[] | null>(null);
@@ -541,7 +541,8 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
             </div>
           </Panel>
 
-          {(existing || loaded) && (
+          {/* серверный сценарий — только после загрузки с сервера, чтобы статус не перетёрло поздним ответом */}
+          {(isServerScenarioId(id) ? loaded : !!existing) && (
             <div className="flex flex-wrap gap-2">
               {draft.status !== 'archived' && (
                 <Button disabled={busy} onClick={() => void changeStatus('archived')}>

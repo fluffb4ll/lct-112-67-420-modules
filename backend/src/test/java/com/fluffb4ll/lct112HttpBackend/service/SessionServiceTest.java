@@ -3,6 +3,7 @@ package com.fluffb4ll.lct112HttpBackend.service;
 import com.fluffb4ll.lct112HttpBackend.dto.request.StartSessionRequestDto;
 import com.fluffb4ll.lct112HttpBackend.dto.response.IncomingCardDto;
 import com.fluffb4ll.lct112HttpBackend.dto.response.IncomingCardsStreamDto;
+import com.fluffb4ll.lct112HttpBackend.entity.OperatorCardEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.RoleEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.ScenarioEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.SessionEntity;
@@ -23,6 +24,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import javax.naming.AuthenticationException;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -77,35 +79,59 @@ class SessionServiceTest {
     // ───────────── поток карточек идущего занятия ─────────────
 
     private IncomingCardsStreamDto stream(ScenarioStatus otherStatus) throws AuthenticationException {
+        return stream(2, otherStatus, false);
+    }
+
+    /**
+     * Занятие без группы из двух сценариев, давно идёт — все запланированные карточки уже должны прийти.
+     * При этих id в перемешанном пуле первым идёт otherId, вторым — approvedId
+     *
+     * @param otherStatus     статус второго сценария; null — сценарий удалён
+     * @param otherSubmitted  обучающийся уже сдал карточку по второму сценарию
+     */
+    private IncomingCardsStreamDto stream(int targetCards, ScenarioStatus otherStatus, boolean otherSubmitted)
+            throws AuthenticationException {
         UserEntity student = mock(UserEntity.class);
         when(student.getId()).thenReturn(UUID.fromString("00000000-0000-0000-0000-000000000042"));
         when(authService.verifyAuthToken(token, null)).thenReturn(student);
 
-        // занятие без группы, давно идёт — все карточки уже должны прийти
         SessionEntity session = SessionEntity.builder()
                 .id(sessionId)
                 .scenarioIds(new UUID[]{otherId, approvedId})
-                .targetCardsCount(2)
+                .targetCardsCount(targetCards)
                 .minIntervalSeconds(15)
                 .maxIntervalSeconds(45)
                 .startedAt(OffsetDateTime.now().minusHours(1))
                 .build();
         when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(session));
-        when(operatorCardRepository.findBySessionId(sessionId)).thenReturn(List.of());
-        when(scenarioRepository.findAllById(anyList())).thenReturn(List.of(
-                scenario(approvedId, ScenarioStatus.APPROVED),
-                scenario(otherId, otherStatus)
-        ));
+
+        List<ScenarioEntity> found = new ArrayList<>(List.of(scenario(approvedId, ScenarioStatus.APPROVED)));
+        ScenarioEntity other = otherStatus == null ? null : scenario(otherId, otherStatus);
+        if (other != null) found.add(other);
+        when(scenarioRepository.findAllById(anyList())).thenReturn(found);
+
+        List<OperatorCardEntity> cards = new ArrayList<>();
+        if (otherSubmitted) {
+            OperatorCardEntity card = mock(OperatorCardEntity.class);
+            when(card.getStudent()).thenReturn(student);
+            when(card.getScenario()).thenReturn(other);
+            when(card.getId()).thenReturn(UUID.randomUUID());
+            cards.add(card);
+        }
+        when(operatorCardRepository.findBySessionId(sessionId)).thenReturn(cards);
 
         return sessionService.getIncomingCardsStream(token, sessionId);
+    }
+
+    private static List<UUID> delivered(IncomingCardsStreamDto dto) {
+        return dto.incomingCards().stream().map(IncomingCardDto::scenarioId).toList();
     }
 
     @Test
     void archivedScenarioIsNotDeliveredToStudent() throws AuthenticationException {
         IncomingCardsStreamDto dto = stream(ScenarioStatus.ARCHIVED);
 
-        List<UUID> delivered = dto.incomingCards().stream().map(IncomingCardDto::scenarioId).toList();
-        assertEquals(List.of(approvedId), delivered);
+        assertEquals(List.of(approvedId), delivered(dto));
         // снятая карточка не держит занятие незавершённым
         assertEquals(1, dto.targetCardsCount());
         assertFalse(dto.isSessionCompleted());
@@ -115,7 +141,7 @@ class SessionServiceTest {
     void draftScenarioIsNotDeliveredToStudent() throws AuthenticationException {
         IncomingCardsStreamDto dto = stream(ScenarioStatus.DRAFT);
 
-        assertEquals(List.of(approvedId), dto.incomingCards().stream().map(IncomingCardDto::scenarioId).toList());
+        assertEquals(List.of(approvedId), delivered(dto));
     }
 
     @Test
@@ -128,6 +154,34 @@ class SessionServiceTest {
         // при этих id утверждённая карточка идёт второй — иначе проверка была бы пустой
         assertTrue(before > 0);
         assertEquals(before, after);
+    }
+
+    @Test
+    void withdrawnScenarioIsReplacedByNextApprovedOne() throws AuthenticationException {
+        // в плане одна карточка, и по расписанию это как раз снятый сценарий
+        IncomingCardsStreamDto dto = stream(1, ScenarioStatus.ARCHIVED, false);
+
+        assertEquals(List.of(approvedId), delivered(dto));
+        assertEquals(1, dto.targetCardsCount());
+        assertFalse(dto.isSessionCompleted());
+    }
+
+    @Test
+    void alreadySubmittedCardStaysAfterArchiving() throws AuthenticationException {
+        IncomingCardsStreamDto dto = stream(2, ScenarioStatus.ARCHIVED, true);
+
+        assertEquals(List.of(otherId, approvedId), delivered(dto));
+        assertTrue(dto.incomingCards().getFirst().isSubmitted());
+        assertEquals(2, dto.targetCardsCount());
+        assertFalse(dto.isSessionCompleted());
+    }
+
+    @Test
+    void deletedScenarioDoesNotKeepSessionOpen() throws AuthenticationException {
+        IncomingCardsStreamDto dto = stream(2, null, false);
+
+        assertEquals(List.of(approvedId), delivered(dto));
+        assertEquals(1, dto.targetCardsCount());
     }
 
     // ───────────── запуск занятия ─────────────
