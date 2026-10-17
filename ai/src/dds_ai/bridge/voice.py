@@ -12,6 +12,8 @@
   DDS_TTS_VOICE_PATH_MALE — путь к мужскому голосу; пусто — мужские реплики женским голосом.
   DDS_TTS_VOICE_URL, DDS_TTS_VOICE_URL_MALE — откуда скачать голос, если файла нет
                          (по умолчанию rhasspy/piper-voices: irina и denis).
+  DDS_STT_MAX_BYTES    — предел размера записи, байт (по умолчанию 10 МБ; больше — 413).
+  DDS_STT_MAX_SECONDS  — предел длительности записи, с (по умолчанию 120; больше — 422).
 
 Нет модели, нет пакета, сбой — `VoiceUnavailable`; фронт откатывается на Web Speech или ввод
 текстом (`frontend/src/training/voice.ts`).
@@ -25,11 +27,13 @@ import os
 import threading
 import urllib.request
 import wave
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from ..ports import STTProvider, TTSProvider
 from ..voice.normalize import normalize_for_tts
+from ..voice.stt import AudioTooLong
 
 log = logging.getLogger(__name__)
 
@@ -39,12 +43,51 @@ DEFAULT_VOICE_URLS = {
     "male": f"{PIPER_VOICES}/denis/medium/ru_RU-denis-medium.onnx",
 }
 _ENV_SUFFIX = {"female": "", "male": "_MALE"}
-MAX_AUDIO_BYTES = 15 * 1024 * 1024
+DEFAULT_MAX_AUDIO_BYTES = 10 * 1024 * 1024
+DEFAULT_MAX_AUDIO_SECONDS = 120.0
 MAX_TTS_CHARS = 600
+# Подсказки распознаванию (адрес, тип происшествия, ключевые слова доклада) идут в
+# initial_prompt whisper, а у него окно ~224 токена: длинный список обрезаем, а не роняем запрос.
+STT_MAX_HINTS = 12
+STT_HINT_MAX_CHARS = 60
+STT_HINTS_MAX_CHARS = 300
 
 
 class VoiceUnavailable(RuntimeError):
     pass
+
+
+class AudioTooLarge(ValueError):
+    """Запись больше предела по размеру — 413."""
+
+    def __init__(self, limit: int):
+        super().__init__(f"запись больше {limit / 1024 / 1024:g} МБ — сократите доклад")
+
+
+def _env_num(env: dict[str, str], name: str, default: float) -> float:
+    try:
+        value = float(env.get(name) or default)
+    except ValueError:
+        log.warning("%s=%r — не число, беру %s", name, env.get(name), default)
+        return default
+    return value if value > 0 else default
+
+
+def clean_hints(hints: Iterable[str]) -> list[str]:
+    """Подсказки без пустых и повторов, каждая и весь список — в пределах длины."""
+    out: list[str] = []
+    seen: set[str] = set()
+    total = 0
+    for raw in hints:
+        hint = " ".join(str(raw).split())[:STT_HINT_MAX_CHARS]
+        if not hint or hint.lower() in seen:
+            continue
+        if len(out) >= STT_MAX_HINTS or total + len(hint) > STT_HINTS_MAX_CHARS:
+            break
+        seen.add(hint.lower())
+        out.append(hint)
+        total += len(hint) + 2  # ", " между подсказками
+    return out
 
 
 def _download(url: str, dest: Path) -> None:
@@ -84,6 +127,12 @@ class VoiceService:
         env: dict[str, str] | None = None,
     ):
         self._env = dict(os.environ if env is None else env)
+        self.max_audio_bytes = int(
+            _env_num(self._env, "DDS_STT_MAX_BYTES", DEFAULT_MAX_AUDIO_BYTES)
+        )
+        self.max_audio_seconds = _env_num(
+            self._env, "DDS_STT_MAX_SECONDS", DEFAULT_MAX_AUDIO_SECONDS
+        )
         self._stt = stt
         # голос → (адаптер, имя голоса); переданный адаптер обслуживает оба голоса
         self._tts: dict[str, tuple[TTSProvider, str]] = (
@@ -134,7 +183,7 @@ class VoiceService:
             try:
                 from ..voice.stt.faster_whisper_provider import FasterWhisperSTT
 
-                self._stt = FasterWhisperSTT(model)
+                self._stt = FasterWhisperSTT(model, max_seconds=self.max_audio_seconds)
             except Exception as exc:
                 self._stt_error = f"STT не загрузился: {exc}"
                 log.warning(self._stt_error)
@@ -180,12 +229,14 @@ class VoiceService:
     def transcribe(self, audio: bytes, hints: list[str] | None = None) -> dict[str, Any]:
         if not audio:
             raise ValueError("пустая запись")
-        if len(audio) > MAX_AUDIO_BYTES:
-            raise ValueError("запись слишком длинная")
+        if len(audio) > self.max_audio_bytes:
+            raise AudioTooLarge(self.max_audio_bytes)
         stt = self._get_stt()
         with self._stt_run:
             try:
-                segments = stt.transcribe(audio, hints=tuple(hints or ()))
+                segments = stt.transcribe(audio, hints=tuple(clean_hints(hints or ())))
+            except AudioTooLong:
+                raise
             except Exception as exc:
                 raise VoiceUnavailable(f"распознавание не удалось: {exc}") from exc
         text = " ".join(s.text for s in segments if s.text).strip()

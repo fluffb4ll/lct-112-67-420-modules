@@ -17,6 +17,7 @@ from collections.abc import Sequence
 
 from ...contracts.common import ModelRef
 from ...ports import TranscriptSegment
+from . import AudioTooLong
 
 
 class FasterWhisperSTT:
@@ -27,6 +28,7 @@ class FasterWhisperSTT:
         device: str = "cpu",
         compute_type: str = "int8",
         model_version: str | None = None,
+        max_seconds: float | None = None,
     ):
         try:
             from faster_whisper import WhisperModel
@@ -35,18 +37,28 @@ class FasterWhisperSTT:
                 'faster-whisper не установлен: pip install "dds-ai[voice-fasterwhisper]"'
             ) from exc
         self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        self.max_seconds = max_seconds
         self.model_ref = ModelRef(
             component="stt", model_name="faster-whisper", model_version=model_version or model_size
         )
 
     def transcribe(self, audio: bytes, *, hints: Sequence[str] = ()) -> list[TranscriptSegment]:
+        # Подсказки — только то, что прислал клиент (адрес, тип происшествия), списком через
+        # запятую. Общие слова («улица, дом, корпус…») не добавляем: whisper small на коротких
+        # записях вставляет текст подсказки в расшифровку, а это ложное «прозвучало» в докладе.
         initial_prompt = ", ".join(hints) if hints else None
-        segments, _info = self._model.transcribe(
+        segments, info = self._model.transcribe(
             io.BytesIO(audio),
             language="ru",
             initial_prompt=initial_prompt,
             word_timestamps=True,
         )
+        # длительность известна до распознавания (сегменты — ленивый генератор): длинную
+        # запись отклоняем, не занимая модель на минуты
+        if self.max_seconds and info.duration > self.max_seconds:
+            raise AudioTooLong(
+                f"запись длиннее {self.max_seconds:g} с ({info.duration:.0f} с) — сократите доклад"
+            )
         out: list[TranscriptSegment] = []
         for seg in segments:
             # avg_logprob — логарифм средней вероятности токена, не откалиброванный confidence;

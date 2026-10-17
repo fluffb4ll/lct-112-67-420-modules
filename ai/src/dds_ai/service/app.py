@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from dds_ai import __version__
 from dds_ai.bridge.compose import compose_scenario
 from dds_ai.bridge.evaluate import evaluate_card
-from dds_ai.bridge.voice import MAX_AUDIO_BYTES, VoiceService, VoiceUnavailable
+from dds_ai.bridge.voice import AudioTooLarge, VoiceService, VoiceUnavailable
 from dds_ai.contracts import CONTRACTS_VERSION, SCHEMA_MODELS
 from dds_ai.contracts.events import DispatcherDecision, attempt_event_adapter
 from dds_ai.contracts.rubric import Rubric
@@ -191,19 +191,25 @@ def create_app(
     @app.post("/v1/stt")
     async def stt(request: Request, hints: str = "") -> dict[str, Any]:
         # тело — сама запись (audio/webm, ogg, wav): без multipart, чтобы не тянуть зависимость
-        if int(request.headers.get("content-length") or 0) > MAX_AUDIO_BYTES:
-            raise HTTPException(413, "запись слишком длинная")
+        limit = voice.max_audio_bytes
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            declared = 0
+        if declared > limit:
+            raise HTTPException(413, str(AudioTooLarge(limit)))
         chunks: list[bytes] = []
         size = 0
         async for chunk in request.stream():
             size += len(chunk)
-            if size > MAX_AUDIO_BYTES:
-                raise HTTPException(413, "запись слишком длинная")
+            if size > limit:
+                raise HTTPException(413, str(AudioTooLarge(limit)))
             chunks.append(chunk)
         audio = b"".join(chunks)
         try:
-            words = [h for h in hints.split(",") if h]
-            return await run_in_threadpool(voice.transcribe, audio, words)
+            return await run_in_threadpool(voice.transcribe, audio, hints.split(","))
+        except AudioTooLarge as exc:
+            raise HTTPException(413, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         except VoiceUnavailable as exc:
