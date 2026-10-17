@@ -2,14 +2,9 @@
 
 import json
 
-import pytest
-
 from dds_ai.bridge.evaluate import evaluate_card
 from tests.fakes import FakeLLM
 from tests.test_bridge_evaluate import GOOD, PARAPHRASE, request, run
-
-# WIP: фильтр текста судьи (п.3) ещё не реализован; strict — снять пометку вместе с реализацией
-pytestmark = pytest.mark.xfail(strict=True, reason="п.3: фильтр разбора судьи не реализован")
 
 
 def verdict(summary, remarks=()):
