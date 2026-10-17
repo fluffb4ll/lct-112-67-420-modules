@@ -1,6 +1,7 @@
 package com.fluffb4ll.lct112HttpBackend.service;
 
 import com.fluffb4ll.lct112HttpBackend.client.AiEvaluationClient;
+import com.fluffb4ll.lct112HttpBackend.config.AiEvaluationExecutorConfig;
 import com.fluffb4ll.lct112HttpBackend.dto.ai.AiEvaluationMetricsDto;
 import com.fluffb4ll.lct112HttpBackend.dto.ai.AiEvaluationRequestDto;
 import com.fluffb4ll.lct112HttpBackend.dto.ai.AiEvaluationResponseDto;
@@ -21,6 +22,8 @@ import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
 import com.fluffb4ll.lct112HttpBackend.util.HttpRequestUtil;
 import jakarta.transaction.Transactional;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -28,9 +31,16 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.naming.AuthenticationException;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
 
 /**
@@ -49,12 +59,18 @@ public class EvaluationService {
     static final String AI_UNAVAILABLE_MESSAGE =
             "ИИ-контур не вернул оценку. Повторите позже или выставьте оценку вручную";
 
+    static final String AI_QUEUE_FULL_MESSAGE =
+            "Очередь оценки ИИ переполнена. Повторите позже или выставьте оценку вручную";
+
     private final EvaluationRepository evaluationRepository;
     private final OperatorCardRepository operatorCardRepository;
     private final AuthService authService;
     private final AuditService auditService;
     private final AiEvaluationClient aiEvaluationClient;
     private final TransactionTemplate transactionTemplate;
+    private final Executor aiEvaluationExecutor;
+    /** Сколько ручной запуск ждёт результата; дольше — отдаём PENDING, оценка допишется в фоне */
+    private final Duration manualRunWait;
 
     public EvaluationService(
             EvaluationRepository evaluationRepository,
@@ -62,13 +78,18 @@ public class EvaluationService {
             AuthService authService,
             AuditService auditService,
             AiEvaluationClient aiEvaluationClient,
-            PlatformTransactionManager transactionManager
+            PlatformTransactionManager transactionManager,
+            @Qualifier(AiEvaluationExecutorConfig.AI_EVALUATION_EXECUTOR) Executor aiEvaluationExecutor,
+            // меньше proxy_read_timeout nginx (120 с), но больше таймаута чтения ИИ (90 с)
+            @Value("${app.ai.manual-wait-ms:100000}") long manualRunWaitMs
     ) {
         this.evaluationRepository = evaluationRepository;
         this.operatorCardRepository = operatorCardRepository;
         this.authService = authService;
         this.auditService = auditService;
         this.aiEvaluationClient = aiEvaluationClient;
+        this.aiEvaluationExecutor = aiEvaluationExecutor;
+        this.manualRunWait = Duration.ofMillis(manualRunWaitMs);
         // Всегда своя транзакция: markAiUnavailable зовётся из afterCommit транзакции сдачи,
         // где REQUIRED «присоединился» бы к уже зафиксированной транзакции и запись бы не сохранилась
         this.transactionTemplate = new TransactionTemplate(transactionManager);
@@ -117,12 +138,44 @@ public class EvaluationService {
         });
     }
 
-    /** Ручной (пере)запуск оценки ИИ. Если контур не ответил — статус UNAVAILABLE сохраняется, а клиент получает 503. */
+    /**
+     * Ручной (пере)запуск оценки ИИ. Если контур не ответил — статус UNAVAILABLE сохраняется, а клиент получает 503.
+     * На карточку идёт не больше одного запуска: пока идёт прежний, повторный запрос получает текущий PENDING.
+     * Вызов ИИ выполняется в общем пуле aiEvaluationExecutor с его лимитом; переполнение пула — 503.
+     */
     public EvaluationDto evaluateWithAi(UUID token, UUID cardId) throws AuthenticationException {
         UserEntity currentUser = authService.verifyAuthToken(token, null);
         verifyTeacherOrAdmin(currentUser, "You do not have permission to evaluate cards");
 
-        AiRun run = runAiEvaluation(cardId);
+        AiClaim claim = claimAiRun(cardId);
+        if (!claim.claimed()) {
+            return claim.current();
+        }
+
+        CompletableFuture<AiRun> future;
+        try {
+            future = CompletableFuture.supplyAsync(() -> completeAiRun(cardId, claim.request()), aiEvaluationExecutor);
+        } catch (RejectedExecutionException e) {
+            log.warn("AI evaluation queue is full, manual run for card {} rejected", cardId);
+            releaseAiClaim(cardId, claim.previousStatus());
+            throw new AiEvaluationUnavailableException(AI_QUEUE_FULL_MESSAGE);
+        }
+
+        AiRun run;
+        try {
+            run = future.get(manualRunWait.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            // Запуск продолжается в пуле и сам запишет результат
+            return currentEvaluation(cardId);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return currentEvaluation(cardId);
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof RuntimeException cause) {
+                throw cause;
+            }
+            throw new IllegalStateException(e.getCause());
+        }
         if (!run.succeeded()) {
             throw new AiEvaluationUnavailableException(AI_UNAVAILABLE_MESSAGE);
         }
@@ -132,7 +185,12 @@ public class EvaluationService {
     /** Оценка ИИ после фиксации сданной карточки: вызывается вне потока запроса сдачи. */
     public void triggerAiEvaluationById(UUID cardId) {
         try {
-            runAiEvaluation(cardId);
+            AiClaim claim = claimAiRun(cardId);
+            if (!claim.claimed()) {
+                log.info("AI evaluation of card {} is already running, skipping", cardId);
+                return;
+            }
+            completeAiRun(cardId, claim.request());
         } catch (OperatorCardException e) {
             log.warn("Card {} disappeared before AI evaluation", cardId);
         }
@@ -169,16 +227,54 @@ public class EvaluationService {
     private record AiRun(EvaluationDto evaluation, boolean succeeded) {
     }
 
-    /** Три шага: короткая транзакция (отметка PENDING и сбор запроса) → вызов ИИ без транзакции → короткая транзакция с результатом. */
-    private AiRun runAiEvaluation(UUID cardId) {
-        AiEvaluationRequestDto requestDto = writeEvaluation(cardId, (card, evaluation) -> {
+    /** Захват запуска ИИ: claimed=false — по карточке уже идёт запуск, current — его текущее состояние. */
+    private record AiClaim(boolean claimed, AiEvaluationRequestDto request, AiEvaluationStatus previousStatus,
+                           EvaluationDto current) {
+    }
+
+    /**
+     * Шаг 1 из трёх (отметка PENDING и сбор запроса → вызов ИИ без транзакции → короткая транзакция с результатом).
+     * Строка оценки читается под блокировкой, поэтому проверка «уже идёт» и отметка PENDING атомарны —
+     * и для ручных запусков, и для автооценки, и между экземплярами бэкенда.
+     */
+    private AiClaim claimAiRun(UUID cardId) {
+        return writeEvaluation(cardId, (card, evaluation) -> {
+            if (EvaluationDto.isAiRunning(evaluation)) {
+                return new AiClaim(false, null, null, EvaluationDto.fromEntity(evaluation));
+            }
+            AiEvaluationStatus previousStatus = evaluation.getAiStatus();
             evaluation.setAiStatus(AiEvaluationStatus.PENDING);
             evaluation.setUpdatedAt(OffsetDateTime.now());
             evaluationRepository.saveAndFlush(evaluation);
             // Сценарий загружается лениво — запрос собираем внутри транзакции
-            return buildAiRequest(card);
+            return new AiClaim(true, buildAiRequest(card), previousStatus, null);
         });
+    }
 
+    /** Запуск так и не начался (пул переполнен) — возвращаем прежний статус, а не «ИИ недоступен». */
+    private void releaseAiClaim(UUID cardId, AiEvaluationStatus previousStatus) {
+        try {
+            writeEvaluation(cardId, (card, evaluation) -> {
+                if (evaluation.getAiStatus() == AiEvaluationStatus.PENDING) {
+                    evaluation.setAiStatus(previousStatus);
+                    evaluation.setUpdatedAt(OffsetDateTime.now());
+                    evaluationRepository.saveAndFlush(evaluation);
+                }
+                return null;
+            });
+        } catch (RuntimeException e) {
+            log.warn("Failed to release AI evaluation claim of card {}: {}", cardId, e.getMessage());
+        }
+    }
+
+    private EvaluationDto currentEvaluation(UUID cardId) {
+        return transactionTemplate.execute(status -> evaluationRepository.findByCardId(cardId)
+                .map(EvaluationDto::fromEntity)
+                .orElseThrow(() -> new OperatorCardException("Evaluation not found for this card")));
+    }
+
+    /** Шаги 2 и 3: вызов ИИ без транзакции и короткая транзакция с результатом. */
+    private AiRun completeAiRun(UUID cardId, AiEvaluationRequestDto requestDto) {
         Optional<AiEvaluationResponseDto> rawResponse = aiEvaluationClient.requestEvaluation(requestDto);
         // Ответ без балла или с баллом вне 0..100 записывать нельзя (CHECK в БД) — это та же недоступность ИИ
         Optional<AiEvaluationResponseDto> aiResponseOpt = rawResponse.filter(EvaluationService::isUsableAiResponse);
