@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { initialSttMode, sttFallback } from './sttMode';
+import { describe, expect, it, vi } from 'vitest';
+import { initialSttMode, serverTranscript, sttFallback } from './sttMode';
 
 describe('initialSttMode', () => {
   it('сервер в приоритете, затем браузер, затем текст', () => {
@@ -23,5 +23,19 @@ describe('sttFallback', () => {
 
   it('речь не распознана — доклад текстом, сервер остаётся', () => {
     expect(sttFallback('', true)).toEqual({ mode: 'server', note: 'Речь не распознана — введите доклад текстом' });
+  });
+});
+
+describe('serverTranscript', () => {
+  it('пустая запись — нераспознанная речь, сервер не спрашиваем', async () => {
+    const recognize = vi.fn(async () => 'текст');
+    expect(await serverTranscript(null, recognize)).toBe('');
+    expect(recognize).not.toHaveBeenCalled();
+  });
+
+  it('есть запись — ответ сервера как есть, включая null (не ответил)', async () => {
+    const blob = new Blob(['x']);
+    expect(await serverTranscript(blob, async () => 'Кировоградская 22')).toBe('Кировоградская 22');
+    expect(await serverTranscript(blob, async () => null)).toBeNull();
   });
 });

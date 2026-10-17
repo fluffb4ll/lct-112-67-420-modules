@@ -22,3 +22,11 @@ export function sttFallback(result: string | null, browserOk: boolean): { mode: 
   }
   return { mode: 'server', note: 'Речь не распознана — введите доклад текстом' };
 }
+
+/**
+ * Текст доклада от серверного распознавания. Пустая запись (микрофон ничего не дал) — как нераспознанная
+ * речь (''), без запроса к серверу; null — сервер не ответил.
+ */
+export async function serverTranscript(blob: Blob | null | undefined, recognize: (blob: Blob) => Promise<string | null>): Promise<string | null> {
+  return blob ? recognize(blob) : '';
+}

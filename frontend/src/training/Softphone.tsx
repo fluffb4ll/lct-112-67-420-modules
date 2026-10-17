@@ -6,7 +6,7 @@ import { useRun } from '../store/training';
 import { cx } from '../ui/cx';
 import { phoneLabel, useSoftphone } from './softphoneStore';
 import { busy, ringback } from './sounds';
-import { initialSttMode, sttFallback, type SttMode } from './sttMode';
+import { initialSttMode, serverTranscript, sttFallback, type SttMode } from './sttMode';
 import { listen, recognize, recordMic, serverSttAvailable, speak, sttAvailable, stopSpeaking, type Listener, type Recording } from './voice';
 
 /*
@@ -135,14 +135,11 @@ export function Softphone() {
     recording.current = null;
     let transcript = (textMode ? typed : heard).trim();
     if (!textMode && sttMode.current === 'server') {
-      let text: string | null = ''; // запись пуста (микрофон ничего не дал) — как нераспознанная речь
-      if (rec?.blob) {
-        setRecognizing(true);
-        const a = run.current?.scenario.incident.address;
-        text = await recognize(rec.blob, a ? [a.street, a.house].filter(Boolean) : []);
-        if (alive.current) setRecognizing(false);
-        if (!live()) return; // звонок сброшен, пока распознавали
-      }
+      if (rec?.blob) setRecognizing(true);
+      const a = run.current?.scenario.incident.address;
+      const text = await serverTranscript(rec?.blob, (blob) => recognize(blob, a ? [a.street, a.house].filter(Boolean) : []));
+      if (alive.current) setRecognizing(false);
+      if (!live()) return; // звонок сброшен, пока распознавали
       if (!text) {
         // распознать не вышло — звонок продолжается: доклад повторяется голосом через браузер или вводится текстом
         const next = sttFallback(text, sttAvailable());

@@ -454,11 +454,12 @@ export const useRun = create<RunState>((set, get) => {
         evaluation,
       });
       // занятие с сервера: отправляем заполненную карточку на оценку
-      let sent = false;
+      const serverSession = !!(s.fromServer && s.sessionId);
+      let sendFailed: string | undefined;
       if (s.fromServer && s.sessionId) {
         const inc = get().journal.find((i) => i.id === cur.incidentId);
-        if (inc) {
-          sent = true;
+        if (!inc) sendFailed = 'Карточка не попала в журнал и не отправлена на сервер';
+        else {
           const report = events
             .map((e) => e.transcript ?? '')
             .filter(Boolean)
@@ -495,7 +496,7 @@ export const useRun = create<RunState>((set, get) => {
       }
       set({
         current: cur,
-        result: { scenario: cur.scenario, evaluation, fromServer: sent, passScore: s.norms.passScore },
+        result: { scenario: cur.scenario, evaluation, fromServer: serverSession, sendFailed, passScore: s.norms.passScore },
         history: [...s.history, { title: cur.scenario.title, score: evaluation.score, passed: evaluation.passed }],
       });
     },
