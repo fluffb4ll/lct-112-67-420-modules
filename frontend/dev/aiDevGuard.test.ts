@@ -18,10 +18,17 @@ describe('проверка /ai/ в vite dev', () => {
 
   it('без входа или с протухшим токеном — 401', async () => {
     expect(await checkAi('/ai/v1/voice', undefined, BACKEND, answer(401))).toBe(401)
-    expect(await checkAi('/ai/v1/voice', 'AUTH_TOKEN=old', BACKEND, answer(500))).toBe(401)
+    expect(await checkAi('/ai/v1/voice', 'AUTH_TOKEN=old', BACKEND, answer(403))).toBe(401)
   })
 
-  it('бэкенд не отвечает — 503', async () => {
+  it('слеш на конце адреса бэкенда не ломает проверку', async () => {
+    const f = answer(204)
+    expect(await checkAi('/ai/v1/voice', 'AUTH_TOKEN=abc', `${BACKEND}/`, f)).toBe('next')
+    expect(f).toHaveBeenCalledWith(`${BACKEND}/api/auth/check`, expect.anything())
+  })
+
+  it('бэкенд упал или не отвечает — 503, а не выход из сессии', async () => {
+    expect(await checkAi('/ai/v1/voice', 'AUTH_TOKEN=abc', BACKEND, answer(500))).toBe(503)
     const f = vi.fn(async () => {
       throw new TypeError('fetch failed')
     })

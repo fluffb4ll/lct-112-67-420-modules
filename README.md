@@ -178,6 +178,7 @@ docker run --rm -v "$PWD/backend":/app -v lct-m2:/root/.m2 -w /app eclipse-temur
   (`dds_password` без `.env`, `dds_password_secret` из `.env.example`) и задаётся только при создании
   тома `pgdata`.
 - **Порты 8080 и 5432** тоже опубликованы только на `127.0.0.1` (`BACKEND_BIND`, `POSTGRES_BIND`):
-  фронт ходит к API через nginx, бэкенд к БД — по сети compose. Открыть наружу — `BACKEND_BIND=0.0.0.0`
-  в `.env` (нужно, если к этому бэкенду ходит Vite dev с другой машины, например Raspberry Pi
-  в Tailscale); БД наружу открывать не нужно.
+  фронт ходит к API через nginx, бэкенд к БД — по сети compose. Если к этому бэкенду ходит Vite dev
+  с другой машины (Raspberry Pi в Tailscale), задайте в `.env` `BACKEND_BIND=<адрес в Tailscale>`
+  (`0.0.0.0` откроет 8080 всем); БД наружу открывать не нужно. Старый вид `BACKEND_PORT=127.0.0.1:8080`
+  больше не работает — в `*_PORT` теперь только номер порта.

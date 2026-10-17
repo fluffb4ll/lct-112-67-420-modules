@@ -3,7 +3,8 @@
  *
  * Повторяет nginx из сборки (docker/nginx.conf.template): наружу только ручки, которые зовёт фронт,
  * остальное — 404; перед проксированием — GET {бэкенд}/api/auth/check с кукой запроса
- * (204 — пускаем, иначе 401). Лимитов частоты здесь нет — их ставит только nginx.
+ * (204 — пускаем, 401/403 — 401, прочее и нет ответа — 503).
+ * Лимитов частоты здесь нет — их ставит только nginx.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -33,12 +34,15 @@ export async function checkAi(
   const path = url.split('?', 1)[0]
   if (!AI_PUBLIC_PATHS.has(path)) return 404
   try {
-    const res = await fetchFn(`${backend}/api/auth/check`, {
+    // слеш на конце target не должен давать //api/… (Spring ответит 404 — и все получат 401)
+    const res = await fetchFn(`${backend.replace(/\/+$/, '')}/api/auth/check`, {
       headers: cookie ? { cookie } : {},
       redirect: 'manual',
       signal: AbortSignal.timeout(5000),
     })
-    return res.status === 204 ? 'next' : 401
+    if (res.status === 204) return 'next'
+    // 401 фронт считает выходом из сессии — сбой бэкенда за него не выдаём
+    return res.status === 401 || res.status === 403 ? 401 : 503
   } catch {
     // бэкенд не ответил — вход не проверить
     return 503
