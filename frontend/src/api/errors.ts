@@ -10,6 +10,7 @@ const RU: Record<string, string> = {
   'Invalid authentication token': 'Сессия недействительна. Войдите снова.',
   'Authentication token expired': 'Сессия истекла. Войдите снова.',
   'You do not have required permissions': 'Недостаточно прав для этого действия',
+  Forbidden: 'Недостаточно прав',
   'User already exists': 'Пользователь с таким логином уже есть',
   'Username already taken': 'Пользователь с таким логином уже есть',
   'User not found': 'Пользователь не найден',
