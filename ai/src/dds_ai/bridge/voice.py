@@ -17,6 +17,11 @@
   DDS_VOICE_LOCK_TIMEOUT_S — сколько ждать, пока модель занята другой записью или фразой
                          (по умолчанию 15 с; дольше — 503 «занято, повторите»).
 
+Модели STT и TTS грузятся под разными блокировками: долгая докачка голоса Piper не держит
+распознавание. Неудачная загрузка запоминается на `RETRY_LOAD_AFTER_S` (60 с): за это время
+запросы сразу получают 503, `/v1/voice` показывает модель недоступной; потом — новая попытка
+(том с моделями могли докачать, не перезапуская сервис).
+
 Нет модели, нет пакета, сбой — `VoiceUnavailable`; фронт откатывается на Web Speech или ввод
 текстом (`frontend/src/training/voice.ts`).
 """
@@ -27,9 +32,10 @@ import io
 import logging
 import os
 import threading
+import time
 import urllib.request
 import wave
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +60,7 @@ STT_MAX_HINTS = 12
 STT_HINT_MAX_CHARS = 60
 STT_HINTS_MAX_CHARS = 300
 DEFAULT_VOICE_LOCK_TIMEOUT_S = 15.0
+RETRY_LOAD_AFTER_S = 60.0
 
 
 class VoiceUnavailable(RuntimeError):
@@ -132,7 +139,9 @@ class VoiceService:
         stt: STTProvider | None = None,
         tts: TTSProvider | None = None,
         env: dict[str, str] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ):
+        self._clock = clock
         self._env = dict(os.environ if env is None else env)
         self.max_audio_bytes = int(
             _env_num(self._env, "DDS_STT_MAX_BYTES", DEFAULT_MAX_AUDIO_BYTES)
@@ -148,23 +157,33 @@ class VoiceService:
         self._tts: dict[str, tuple[TTSProvider, str]] = (
             {} if tts is None else {g: (tts, "default") for g in _ENV_SUFFIX}
         )
+        # последняя ошибка загрузки и когда она случилась (по `clock`)
         self._stt_error: str | None = None
+        self._stt_failed_at = 0.0
         self._tts_error: dict[str, str] = {}
-        self._lock = threading.Lock()
+        self._tts_failed_at: dict[str, float] = {}
+        self._stt_load = threading.Lock()
+        self._tts_load = threading.Lock()
         self._stt_run = threading.Lock()  # одна модель — одно распознавание за раз
         self._tts_run = threading.Lock()
 
     # --- что доступно ---
 
+    def _recent(self, failed_at: float | None) -> bool:
+        return failed_at is not None and self._clock() - failed_at < RETRY_LOAD_AFTER_S
+
+    def _stt_down(self) -> bool:
+        return self._stt_error is not None and self._recent(self._stt_failed_at)
+
+    def _tts_down(self, gender: str) -> bool:
+        return gender in self._tts_error and self._recent(self._tts_failed_at.get(gender))
+
     def capabilities(self) -> dict[str, Any]:
         return {
             "stt": self._stt is not None
-            or (_present(self._env.get("DDS_STT_MODEL", "")) and self._stt_error is None),
+            or (_present(self._env.get("DDS_STT_MODEL", "")) and not self._stt_down()),
             "tts": "female" in self._tts
-            or (
-                _present(self._env.get("DDS_TTS_VOICE_PATH", ""))
-                and "female" not in self._tts_error
-            ),
+            or (_present(self._env.get("DDS_TTS_VOICE_PATH", "")) and not self._tts_down("female")),
             "sttModel": None if self._stt is None else self._stt.model_ref.model_dump(mode="json"),
             "ttsModels": {
                 g: t.model_ref.model_dump(mode="json") for g, (t, _) in self._tts.items()
@@ -172,8 +191,8 @@ class VoiceService:
             "errors": {
                 k: v
                 for k, v in {
-                    "stt": self._stt_error,
-                    **{f"tts_{g}": e for g, e in self._tts_error.items()},
+                    "stt": self._stt_error if self._stt_down() else None,
+                    **{f"tts_{g}": e for g, e in self._tts_error.items() if self._tts_down(g)},
                 }.items()
                 if v
             },
@@ -182,28 +201,34 @@ class VoiceService:
     # --- ленивая загрузка ---
 
     def _get_stt(self) -> STTProvider:
-        with self._lock:
+        if self._stt is not None:
+            return self._stt
+        with self._stt_load:
             if self._stt is not None:
                 return self._stt
             model = self._env.get("DDS_STT_MODEL", "")
             if not model:
                 raise VoiceUnavailable("STT не настроен (DDS_STT_MODEL)")
-            if self._stt_error:
-                raise VoiceUnavailable(self._stt_error)
+            if self._stt_down():
+                raise VoiceUnavailable(self._stt_error or "STT недоступен")
             try:
                 from ..voice.stt.faster_whisper_provider import FasterWhisperSTT
 
                 self._stt = FasterWhisperSTT(model, max_seconds=self.max_audio_seconds)
             except Exception as exc:
                 self._stt_error = f"STT не загрузился: {exc}"
+                self._stt_failed_at = self._clock()
                 log.warning(self._stt_error)
                 raise VoiceUnavailable(self._stt_error) from exc
+            self._stt_error = None
             return self._stt
 
     def _get_tts(self, gender: str) -> tuple[TTSProvider, str]:
         if gender not in _ENV_SUFFIX:
             raise ValueError(f"неизвестный голос {gender!r}")
-        with self._lock:
+        if gender in self._tts:
+            return self._tts[gender]
+        with self._tts_load:
             return self._load_tts(gender)
 
     def _load_tts(self, gender: str) -> tuple[TTSProvider, str]:
@@ -211,7 +236,7 @@ class VoiceService:
             return self._tts[gender]
         suffix = _ENV_SUFFIX[gender]
         path = self._env.get(f"DDS_TTS_VOICE_PATH{suffix}", "")
-        if not path or gender in self._tts_error:
+        if not path or self._tts_down(gender):
             if gender != "female":
                 return self._load_tts("female")  # нет мужского голоса — говорим женским
             raise VoiceUnavailable(
@@ -226,8 +251,10 @@ class VoiceService:
                     self._env.get(f"DDS_TTS_VOICE_URL{suffix}") or DEFAULT_VOICE_URLS[gender], p
                 )
             self._tts[gender] = (PiperTTS(str(p), voice_name=p.stem), p.stem)
+            self._tts_error.pop(gender, None)
         except Exception as exc:
             self._tts_error[gender] = f"TTS ({gender}) не загрузился: {exc}"
+            self._tts_failed_at[gender] = self._clock()
             log.warning(self._tts_error[gender])
             if gender != "female":
                 return self._load_tts("female")

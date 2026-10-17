@@ -137,3 +137,88 @@ def test_oversized_recording_is_413():
     c = client(VoiceService(stt=SpeakingSTT(), tts=FakeTTS(), env={"DDS_STT_MAX_BYTES": "4"}))
     r = c.post("/v1/stt", content=b"x" * 10)
     assert r.status_code == 413 and "МБ" in r.json()["detail"]
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_failed_load_is_retried_after_pause(monkeypatch):
+    import dds_ai.voice.stt.faster_whisper_provider as fw
+
+    clock = Clock()
+    svc = VoiceService(env={"DDS_STT_MODEL": "small"}, clock=clock)
+    calls = []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ImportError("веса ещё качаются")
+        return SpeakingSTT()
+
+    monkeypatch.setattr(fw, "FasterWhisperSTT", flaky)
+    c = client(svc)
+    assert c.post("/v1/stt", content=b"x").status_code == 503
+    clock.now += 59
+    assert c.post("/v1/stt", content=b"x").status_code == 503
+    assert len(calls) == 1 and c.get("/v1/voice").json()["stt"] is False
+    clock.now += 2  # пауза прошла — модель снова предлагается и грузится
+    caps = c.get("/v1/voice").json()
+    assert caps["stt"] is True and "stt" not in caps["errors"]
+    assert c.post("/v1/stt", content=b"x").status_code == 200
+    assert len(calls) == 2
+
+
+def test_failed_tts_load_is_retried_after_pause(monkeypatch, tmp_path):
+    import dds_ai.voice.tts.piper_provider as pp
+
+    clock = Clock()
+    calls = []
+
+    def flaky(path, *, voice_name):
+        calls.append(voice_name)
+        if len(calls) == 1:
+            raise RuntimeError("битый onnx")
+        return FakeTTS()
+
+    monkeypatch.setattr(pp, "PiperTTS", flaky)
+    voice = tmp_path / "ru_RU-irina-medium.onnx"
+    voice.write_bytes(b"onnx")
+    c = client(VoiceService(env={"DDS_TTS_VOICE_PATH": str(voice)}, clock=clock))
+    assert c.post("/v1/tts", json={"text": "привет"}).status_code == 503
+    assert c.post("/v1/tts", json={"text": "привет"}).status_code == 503
+    assert c.get("/v1/voice").json()["tts"] is False
+    clock.now += 61
+    assert c.get("/v1/voice").json()["tts"] is True
+    assert c.post("/v1/tts", json={"text": "привет"}).status_code == 200
+    assert len(calls) == 2
+
+
+def test_stt_and_tts_load_under_separate_locks(monkeypatch, tmp_path):
+    import threading
+
+    import dds_ai.voice.stt.faster_whisper_provider as fw
+    import dds_ai.voice.tts.piper_provider as pp
+
+    monkeypatch.setattr(fw, "FasterWhisperSTT", lambda *a, **k: SpeakingSTT())
+    monkeypatch.setattr(pp, "PiperTTS", lambda *a, **k: FakeTTS())
+    voice = tmp_path / "ru_RU-irina-medium.onnx"
+    voice.write_bytes(b"onnx")
+    svc = VoiceService(env={"DDS_STT_MODEL": "small", "DDS_TTS_VOICE_PATH": str(voice)})
+
+    def loads_while_other_lock_held(held, work):
+        held.acquire()  # долгая загрузка другой модели
+        try:
+            t = threading.Thread(target=work, daemon=True)
+            t.start()
+            t.join(timeout=2)
+            return not t.is_alive()
+        finally:
+            held.release()
+
+    assert loads_while_other_lock_held(svc._tts_load, lambda: svc.transcribe(b"x"))
+    assert loads_while_other_lock_held(svc._stt_load, lambda: svc.synthesize("привет"))
