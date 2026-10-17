@@ -16,6 +16,11 @@ export function normalize(text: string): string {
 // Алгоритм один в один с ai/src/dds_ai/bridge/rules.py — оценки фронта и сервера совпадают.
 const FOLD: Record<string, string> = { з: 'с', д: 'т', б: 'п', г: 'к', в: 'ф', ж: 'ш', о: 'а', е: 'и', я: 'и' };
 const FUZZY_MIN_STEM = 5;
+// Короткие корни, которые STT стабильно слышит как другое слово (замерено на faster-whisper
+// small: «в лифте» → «в листе»). Корень засчитан, если слово начинается с такой замены и
+// длиннее её не больше чем на SOUNDALIKE_MAX_TAIL букв (окончание): «листе» — да, «листовка» — нет.
+const STT_SOUNDALIKES: Record<string, string[]> = { лифт: ['лист'] };
+const SOUNDALIKE_MAX_TAIL = 3;
 
 const fold = (s: string) => s.replace(/[здбгвжоея]/g, (c) => FOLD[c]);
 
@@ -30,11 +35,14 @@ function levenshtein(a: string, b: string): number {
 }
 
 /**
- * Корень узнан в слове с ошибкой распознавания. Префикс слова (длиной корня ±1 буква) после свёртки
- * похожих звуков сравнивается с корнем: корни из 5–6 букв должны совпасть точно, длинные — с одной правкой.
- * Короткие корни и числа («19», «лифт») так не сравниваются: «лист» — не «лифт».
+ * Корень узнан в слове с ошибкой распознавания. Сначала созвучия из STT_SOUNDALIKES («листе» — «лифт»),
+ * затем префикс слова (длиной корня ±1 буква) после свёртки похожих звуков сравнивается с корнем:
+ * корни из 5–6 букв должны совпасть точно, длинные — с одной правкой. Короткие корни и числа («19») —
+ * только точно и через созвучия.
  */
 function fuzzyHit(words: string[], stem: string): boolean {
+  for (const alt of STT_SOUNDALIKES[stem] ?? [])
+    if (words.some((w) => w.startsWith(alt) && w.length - alt.length <= SOUNDALIKE_MAX_TAIL)) return true;
   const n = stem.length;
   if (n < FUZZY_MIN_STEM || !/^\p{L}+$/u.test(stem)) return false;
   const budget = n <= 6 ? 0 : 1;
@@ -50,7 +58,8 @@ function fuzzyHit(words: string[], stem: string): boolean {
  * Группы синонимов записаны корнями: [['передан', 'сообщ'], ['пик']].
  * Группа считается упомянутой, если в тексте есть хотя бы один её корень.
  * `fuzzy` — для текста из распознавания речи (доклад руководителю): корень засчитывается
- * и с типичной ошибкой STT («состревание» — «застре»). Набранный текст сверяется строго.
+ * и с типичной ошибкой STT («состревание» — «застре», «в листе» — «лифт»). Набранный текст
+ * (комментарии) сверяется строго.
  */
 export function matchGroups(text: string, groups: string[][], opts: { fuzzy?: boolean } = {}): { hit: number; missing: string[][] } {
   const t = normalize(text);
