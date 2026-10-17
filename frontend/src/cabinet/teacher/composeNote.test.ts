@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AiUnavailable, type ComposeResult } from '../../api/ai';
 import type { Scenario } from '../../domain/types';
-import { composeAndSave, composedOrigin, generateMessage, type GenerateOutcome } from './composeNote';
+import { composeAndSave, composedOrigin, generateMessage, noticesAfterLoad, type GenerateOutcome } from './composeNote';
 
 const sc = {} as Scenario;
 const drafts = ['a', 'b', 'c', 'd'].map((id) => ({ id }) as Scenario);
@@ -73,5 +73,21 @@ describe('generateMessage', () => {
     const m = generateMessage(o({ saved: 1, stoppedByLimit: true }), 4);
     expect(m.tone).toBe('bad');
     expect(m.text).toBe('Превышен лимит запросов к ИИ-контуру — генерация остановлена. Сохранено черновиков: 1 из 4. Подождите минуту и сгенерируйте оставшиеся.');
+  });
+});
+
+describe('noticesAfterLoad — сообщения банка после перезагрузки списка', () => {
+  const limit = generateMessage({ saved: 0, failed: 0, byTemplate: 0, stoppedByLimit: true }, 3);
+
+  it('итог генерации «превышен лимит» не пропадает после reload из onDone', () => {
+    const after = noticesAfterLoad({ load: null, generate: limit }, undefined);
+    expect(after.generate).toBe(limit);
+    expect(after.generate?.text).toContain('Сохранено черновиков: 0 из 3');
+  });
+
+  it('ошибка загрузки показывается и сбрасывается следующей удачной загрузкой, итог генерации не трогает', () => {
+    const failed = noticesAfterLoad({ load: null, generate: limit }, 'Сервер недоступен');
+    expect(failed).toEqual({ load: 'Сервер недоступен', generate: limit });
+    expect(noticesAfterLoad(failed, undefined)).toEqual({ load: null, generate: limit });
   });
 });

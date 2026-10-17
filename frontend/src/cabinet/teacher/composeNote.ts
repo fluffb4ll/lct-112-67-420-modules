@@ -78,3 +78,15 @@ export function generateMessage(o: GenerateOutcome, total: number): { tone: 'ok'
       '. Проверьте эталон и утвердите — после этого сценарии попадут в общий банк.',
   };
 }
+
+/**
+ * Сообщения банка: ошибка загрузки списка и итог генерации — порознь. Перезагрузка списка после генерации
+ * (onDone → reload) меняет только первое: итог генерации, в том числе «превышен лимит», остаётся,
+ * пока преподаватель его не закроет или не начнёт новую генерацию.
+ */
+export interface BankNotices {
+  load: string | null;
+  generate: { tone: 'ok' | 'bad'; text: string } | null;
+}
+
+export const noticesAfterLoad = (n: BankNotices, error: string | undefined): BankNotices => ({ ...n, load: error ?? null });
