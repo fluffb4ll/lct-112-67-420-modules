@@ -66,6 +66,14 @@ describe('evaluateDds', () => {
     const c = check(run('Кировоградская 22 лифт', { comment: 'Не обслуживаем, сообщено в Прахтику.' }), 'comment_content');
     expect(c.ok).toBe(false);
   });
+  it('пустой эталонный путь — балл числом, как в ai', () => {
+    const noPath = { ...lift, expected: { ...lift.expected, path: [] } };
+    const ev = evaluate(run('Кировоградская 22, застревание в лифте', { status: 'Принята' }), noPath);
+    const path = ev.checks.find((c) => c.id === 'path')!;
+    expect(path.points).toBe(10); // полный балл минус 5 за статусы вне эталона
+    expect(ev.checks.find((c) => c.id === 'primary_status')!.points).toBe(30);
+    expect(Number.isNaN(ev.score)).toBe(false);
+  });
 });
 
 describe('pyRound', () => {

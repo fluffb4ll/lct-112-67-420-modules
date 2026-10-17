@@ -74,7 +74,8 @@ export function evaluateDds(
   // 2. Первичный статус
   {
     const max = 30;
-    const want = exp.path[0];
+    // пустой эталонный путь — как в ai (bridge/rules.py): ждём «Принята»
+    const want: ResponseStatus = exp.path[0] ?? 'Принята';
     const skill: Skill = scenario.skills.includes('duplicate') ? 'duplicate' : want === 'Не принята' ? 'zone' : 'profile';
     let points = 0;
     let detail: string;
@@ -125,7 +126,8 @@ export function evaluateDds(
     const max = 15;
     const common = lcs(path, exp.path);
     const extra = path.filter((s) => !exp.path.includes(s));
-    let points = pyRound((common / exp.path.length) * max);
+    // пустой эталон давал NaN во всём балле; в ai за пустой эталон — полный балл
+    let points = exp.path.length ? pyRound((common / exp.path.length) * max) : max;
     if (extra.length) points = Math.max(0, points - 5);
     const detail =
       `Проставлено: ${path.length ? path.map((s) => `«${s}»`).join(' → ') : '—'}. Эталон: ${exp.path.map((s) => `«${s}»`).join(' → ')}` +
