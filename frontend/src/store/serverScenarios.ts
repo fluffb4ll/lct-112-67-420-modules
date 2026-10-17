@@ -12,21 +12,28 @@ import type { Scenario } from '../domain/types';
 
 const KEY = 'dds-trainer-server-scenarios-v1';
 
+/**
+ * Загружен ли набор с сервера в этой вкладке. Сохранённый в localStorage набор может быть устаревшим,
+ * поэтому статус не сохраняется: «сценарий снят с занятий» можно утверждать только после успешной загрузки.
+ */
+export type ServerScenariosStatus = 'idle' | 'loading' | 'ok' | 'failed';
+
 interface ServerScenarios {
   groupId: string | null;
   scenarios: Scenario[];
   /** сценарий карточки серверного занятия, открытой последней (ServerLesson) */
   lesson?: Scenario | null;
+  status?: ServerScenariosStatus;
 }
 
 function load(): ServerScenarios {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return JSON.parse(raw) as ServerScenarios;
+    if (raw) return { ...(JSON.parse(raw) as ServerScenarios), status: 'idle' };
   } catch {
     // нет localStorage (тесты) или испорченные данные — начинаем с пустого
   }
-  return { groupId: null, scenarios: [] };
+  return { groupId: null, scenarios: [], status: 'idle' };
 }
 
 export const useServerScenarioStore = create<ServerScenarios>(load);
@@ -34,15 +41,23 @@ export const useServerScenarioStore = create<ServerScenarios>(load);
 function save(next: ServerScenarios) {
   useServerScenarioStore.setState(next, true);
   try {
-    localStorage.setItem(KEY, JSON.stringify(next));
+    // статус — только для этой вкладки
+    localStorage.setItem(KEY, JSON.stringify({ ...next, status: undefined }));
   } catch {
     // без localStorage живём в памяти
   }
 }
 
 export function setServerScenarios(groupId: string, scenarios: Scenario[]) {
-  save({ ...useServerScenarioStore.getState(), groupId, scenarios });
+  save({ ...useServerScenarioStore.getState(), groupId, scenarios, status: 'ok' });
 }
+
+/** Начало загрузки или сбой: набор не трогаем — тренируемся на загруженном раньше. */
+export function setServerScenariosStatus(status: 'loading' | 'failed') {
+  useServerScenarioStore.setState({ status });
+}
+
+export const useServerScenariosStatus = () => useServerScenarioStore((s) => s.status ?? 'idle');
 
 /** Карточка серверного занятия: её сценарий заменяет прошлый, набор группы не трогает. */
 export function setLessonScenario(sc: Scenario) {

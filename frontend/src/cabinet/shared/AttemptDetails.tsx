@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { reviewAttempt, type Actor } from '../../api';
 import { useDb } from '../../api/db';
-import { useAllScenarios } from '../../store/serverScenarios';
+import { useAllScenarios, useServerScenariosStatus } from '../../store/serverScenarios';
 import { dateTime } from '../../domain/format';
 import { SKILL_LABELS } from '../../domain/skills';
 import type { Attempt } from '../../domain/types';
@@ -9,7 +9,7 @@ import { attemptVerdict } from '../../training/serverScore';
 import { useServerScore } from '../../training/useServerScore';
 import { Badge, Button, Input, Modal, Notice, Textarea } from '../../ui';
 import { cx } from '../../ui/cx';
-import { WITHDRAWN_LABEL } from './withdrawn';
+import { isWithdrawn, scenarioTitle } from './withdrawn';
 
 /*
  * Подробности попытки: проверки, лента действий, экспертная оценка преподавателя.
@@ -18,6 +18,7 @@ import { WITHDRAWN_LABEL } from './withdrawn';
 
 export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attempt; onClose: () => void; reviewer?: Actor }) {
   const scenarios = useAllScenarios();
+  const loadStatus = useServerScenariosStatus();
   const users = useDb((s) => s.db.users);
   const sc = scenarios.find((s) => s.id === attempt.scenarioId);
   const ev = attempt.evaluation;
@@ -44,7 +45,7 @@ export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attemp
 
   return (
     <Modal
-      title={sc?.title ?? `Попытка: ${WITHDRAWN_LABEL}`}
+      title={sc ? sc.title : `Попытка: ${scenarioTitle(sc, loadStatus)}`}
       onClose={onClose}
       width={820}
       footer={<Button onClick={onClose}>Закрыть</Button>}
@@ -63,7 +64,7 @@ export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attemp
           </span>
         )}
       </div>
-      {!sc && (
+      {isWithdrawn(sc, loadStatus) && (
         <div className="mt-2">
           <Notice tone="neutral">Сценарий снят с занятий — условия карточки больше недоступны, результаты попытки сохранены.</Notice>
         </div>

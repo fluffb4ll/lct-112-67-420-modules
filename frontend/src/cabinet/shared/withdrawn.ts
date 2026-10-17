@@ -1,5 +1,6 @@
 import { describeError } from '../../api/errors';
 import { ApiError } from '../../api/http';
+import type { ServerScenariosStatus } from '../../store/serverScenarios';
 
 /*
  * Сценарий сняли с занятий (архив, возврат в черновики, удаление): обучающемуся бэкенд его больше
@@ -9,9 +10,19 @@ import { ApiError } from '../../api/http';
 
 export const WITHDRAWN_LABEL = 'сценарий снят с занятий';
 
-/** Название сценария попытки или подпись «сценарий снят с занятий», если его больше нет. */
-export function scenarioTitle(sc: { title: string } | undefined): string {
-  return sc?.title ?? WITHDRAWN_LABEL;
+/**
+ * Сценария попытки нет в наборе. «Снят с занятий» — только если набор с сервера загружен в этой вкладке;
+ * пока грузится или загрузка сорвалась (а у преподавателя её нет вовсе) — утверждать это нельзя.
+ */
+export function isWithdrawn(sc: unknown, status: ServerScenariosStatus): boolean {
+  return !sc && status === 'ok';
+}
+
+/** Название сценария попытки или подпись вместо него, если сценария в наборе нет. */
+export function scenarioTitle(sc: { title: string } | undefined, status: ServerScenariosStatus): string {
+  if (sc) return sc.title;
+  if (status === 'ok') return WITHDRAWN_LABEL;
+  return status === 'loading' ? 'загрузка…' : 'сценарий недоступен';
 }
 
 /** Почему не открылась карточка занятия: 400 на сценарий — его сняли с занятий уже после выдачи. */

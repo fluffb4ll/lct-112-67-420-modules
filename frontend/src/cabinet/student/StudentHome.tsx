@@ -18,7 +18,7 @@ import { AttemptDetails } from '../shared/AttemptDetails';
 import { Handbook } from './Handbook';
 import { ServerLesson } from './ServerLesson';
 import { ServerProfile } from './ServerProfile';
-import { useAllScenarios } from '../../store/serverScenarios';
+import { useAllScenarios, useServerScenariosStatus } from '../../store/serverScenarios';
 import { useServerScenarios } from './useServerScenarios';
 import { scenarioTitle } from '../shared/withdrawn';
 
@@ -39,6 +39,7 @@ export function StudentHome() {
   const serverScenarios = useServerScenarios(info ? groupId : undefined);
   const serverIds = useMemo(() => new Set(serverScenarios.map((s) => s.id)), [serverScenarios]);
   const scenarios = useAllScenarios();
+  const loadStatus = useServerScenariosStatus();
 
   const scMap = useMemo(() => new Map(scenarios.map((s) => [s.id, s])), [scenarios]);
   const hasStaleLive = !!user && db.live.some((l) => l.studentId === user.id);
@@ -206,7 +207,7 @@ export function StudentHome() {
                 {mine.map((a) => (
                   <tr key={a.id} className="cursor-pointer hover:bg-c-bg" onClick={() => setDetails(a)}>
                     <td className="whitespace-nowrap">{ddmmyyyy(a.startedAt)}</td>
-                    <td>{scenarioTitle(scMap.get(a.scenarioId))}</td>
+                    <td>{scenarioTitle(scMap.get(a.scenarioId), loadStatus)}</td>
                     <td className="whitespace-nowrap">{MODE_LABELS[a.mode]}</td>
                     <td className="text-right font-medium tabular-nums">{finalScore(a)}</td>
                     <td>
