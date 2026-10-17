@@ -155,13 +155,13 @@ else
   echo "FAIL  перебор без входа (ждали 401, затем 429): $codes"; FAILS=$((FAILS + 1))
 fi
 rest
-# «пришло 401, затем 429» — ни одного другого кода
+# «пришло 401, затем 429» — ни одного другого кода; третий аргумент — что печатать вместо кодов
 only401then429() {
-  local what="$1" codes="$2"
+  local what="$1" codes="$2" shown="${3:-$2}"
   if grep -q 429 <<<"$codes" && ! tr ' ' '\n' <<<"$codes" | grep . | grep -qv -e 401 -e 429; then
-    echo "OK    $what: $codes"
+    echo "OK    $what: $shown"
   else
-    echo "FAIL  $what (ждали 401, затем 429): $codes"; FAILS=$((FAILS + 1))
+    echo "FAIL  $what (ждали 401, затем 429): $shown"; FAILS=$((FAILS + 1))
   fi
 }
 only401then429 "мусорная кука (не UUID) — лимит на адрес, 30 подряд" "$(burst 30 -H 'Cookie: AUTH_TOKEN=garbage' "$BASE/ai/v1/voice")"
@@ -169,7 +169,7 @@ rest
 # перебор случайных UUID-кук: у каждой свой лимит, держит только общий лимит на адрес (50 r/s, burst 100)
 codes="$(seq 1 400 | xargs -P 16 -I{} sh -c 'printf "%s " "$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: AUTH_TOKEN=$(printf "%08x-0000-0000-0000-000000000000" {})" "$0/ai/v1/voice")"' "$BASE")"
 summary="$(tr ' ' '\n' <<<"$codes" | grep . | sort | uniq -c | tr -s ' ' | tr '\n' ',')"
-only401then429 "перебор случайных UUID-кук, 400 параллельно — итог по кодам [$summary]" "$codes" | sed -E 's/: [0-9 ]+$//'
+only401then429 "перебор случайных UUID-кук, 400 параллельно" "$codes" "$summary"
 rest
 # повторный вход даёт новый токен — лимит генерации на адрес (60 r/m, burst 30) всё равно держит
 codes="$(for i in $(seq 1 40); do curl -s -o /dev/null -w '%{http_code} ' -X POST -H "$JSON" -H "Cookie: AUTH_TOKEN=$(printf '900d%04x-0000-0000-0000-000000000000' "$i")" -d '{}' "$BASE/ai/v1/scenarios/compose"; done)"
