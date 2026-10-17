@@ -20,6 +20,10 @@ const FOLD: Record<string, string> = { з: 'с', о: 'а', е: 'и', я: 'и' };
 const FUZZY_MIN_STEM = 5;
 // с какой длины корня прощается одна правка (вставка, пропуск, замена) после свёртки
 const FUZZY_EDIT_MIN_STEM = 8;
+// сколько свёрнутых звуков (букв, различных до свёртки и равных после) прощается сверх правок:
+// в корне из 5 букв два звука — уже другое слово («мошен…» → «машин»), а «состре…» → «застре» нужны два
+const FUZZY_MAX_FOLDED_SHORT = 1; // корень из FUZZY_MIN_STEM букв
+const FUZZY_MAX_FOLDED = 2;
 // Короткие корни, которые STT стабильно слышит как другое слово (замерено на faster-whisper
 // small: «в лифте» → «в листе»). Засчитывается только замена с окончанием из
 // SOUNDALIKE_ENDINGS — предложный падеж «в/на листе»: голое «лист», «листа», «листок» — бумага.
@@ -41,8 +45,8 @@ function levenshtein(a: string, b: string): number {
 /**
  * Корень узнан в слове с ошибкой распознавания. Сначала созвучия из STT_SOUNDALIKES («листе» — «лифт»),
  * затем префикс слова (длиной корня ±1 буква) после свёртки сравнивается с корнем: первая и последняя
- * буквы совпадают, правок нет (корни до 7 букв) или одна (от 8). Короткие корни и числа («19») —
- * только точно и через созвучия.
+ * буквы совпадают, правок нет (корни до 7 букв) или одна (от 8), а свёрнутых звуков не больше одного
+ * (корень из 5 букв) или двух. Короткие корни и числа («19») — только точно и через созвучия.
  */
 function fuzzyHit(words: string[], stem: string): boolean {
   for (const alt of STT_SOUNDALIKES[stem] ?? [])
@@ -50,12 +54,20 @@ function fuzzyHit(words: string[], stem: string): boolean {
   const n = stem.length;
   if (n < FUZZY_MIN_STEM || !/^\p{L}+$/u.test(stem)) return false;
   const budget = n >= FUZZY_EDIT_MIN_STEM ? 1 : 0;
+  const foldedMax = n === FUZZY_MIN_STEM ? FUZZY_MAX_FOLDED_SHORT : FUZZY_MAX_FOLDED;
   const target = fold(stem);
   for (const w of words)
     for (const k of [n - 1, n, n + 1]) {
       if (k > w.length) continue;
-      const p = fold(w.slice(0, k));
-      if (p[0] === target[0] && p[p.length - 1] === target[target.length - 1] && levenshtein(p, target) <= budget) return true;
+      const raw = w.slice(0, k);
+      const p = fold(raw);
+      if (
+        p[0] === target[0] &&
+        p[p.length - 1] === target[target.length - 1] &&
+        levenshtein(p, target) <= budget &&
+        levenshtein(raw, stem) <= budget + foldedMax
+      )
+        return true;
     }
   return false;
 }
