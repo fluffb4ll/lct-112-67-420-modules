@@ -1,5 +1,8 @@
 """Нечёткое совпадение корней в докладе руководителю: текст доклада приходит из STT с ошибками."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 from dds_ai.bridge.evaluate import evaluate_card
@@ -20,41 +23,17 @@ def test_strict_mode_keeps_exact_roots():
     assert match_groups(STT_REPORT, GROUPS)[1] == [["застре"]]
 
 
-@pytest.mark.parametrize(
-    ("text", "stem"),
-    [
-        ("состревание в лифте", "застре"),  # з/с и безударная о/а
-        ("застриване в лифте", "застре"),  # е/и
-        ("кирафоградская 22", "кировоградск"),  # одна правка в длинном корне (в/ф, о/а)
-        ("кировградская 22", "кировоградск"),  # пропуск буквы в длинном корне
-        ("Застрял", "застре"),  # формы глагола: я/е после свёртки
-        ("застряли между этажами", "застре"),
-        ("в листе", "лифт"),  # созвучие, которое STT выдаёт стабильно
-        ("застревание в листе", "лифт"),
-    ],
-)
-def test_misheard_roots_match(text, stem):
-    assert match_groups(text, [[stem]], fuzzy=True)[0] == 1
+CASES = json.loads((Path(__file__).parent / "data" / "fuzzy_roots.json").read_text("utf-8"))
 
 
-@pytest.mark.parametrize(
-    ("text", "stem"),
-    [
-        ("приехал застройщик", "застре"),  # другое слово с похожим началом
-        ("нас заставили ждать", "застре"),
-        ("раздали листовки", "лифт"),  # у созвучия — только падежное окончание
-        ("упал листок", "лифт"),
-        ("жёлтые листья", "лифт"),
-        ("листать журнал", "лифт"),
-        ("лифчик", "лифт"),  # короткий корень без созвучия — только точно
-        ("застрахован", "застре"),
-        ("дом 91", "19"),  # числа — только точно
-        ("ушли домой", "домов"),  # 5 букв: правка не прощается
-        ("кировская 22", "кировоградск"),
-    ],
-)
-def test_different_words_do_not_match(text, stem):
-    assert match_groups(text, [[stem]], fuzzy=True)[0] == 0
+@pytest.mark.parametrize(("text", "stem", "why"), CASES["match"])
+def test_misheard_roots_match(text, stem, why):
+    assert match_groups(text, [[stem]], fuzzy=True)[0] == 1, why
+
+
+@pytest.mark.parametrize(("text", "stem", "why"), CASES["no_match"])
+def test_different_words_do_not_match(text, stem, why):
+    assert match_groups(text, [[stem]], fuzzy=True)[0] == 0, why
 
 
 def test_ui_case_zastryal_report_is_credited():
