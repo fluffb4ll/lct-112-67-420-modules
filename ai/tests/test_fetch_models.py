@@ -76,6 +76,20 @@ def test_hash_checked_once_and_mismatch_deleted(tmp_path):
     assert llm.read_bytes() == LLM  # скачан заново
     assert llm.with_name("model.gguf.bad").read_bytes() == b"broken"  # лежавший файл не стёрт
 
+    fourth = fetch(tmp_path)  # модель на месте проверена — отложенный .bad больше не нужен
+    assert "удаляю" in fourth and not llm.with_name("model.gguf.bad").exists()
+    assert llm.read_bytes() == LLM
+
+
+def test_our_mismatched_file_is_deleted_not_kept(tmp_path):
+    mirror(tmp_path / "mirror")
+    cfg = tmp_path / "out" / "whisper-small" / "config.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("stale")
+    log = fetch(tmp_path)
+    assert f"sha256 не совпал: {cfg} — удаляю" in log
+    assert not cfg.with_name("config.json.bad").exists()
+
 
 def test_stale_part_is_discarded(tmp_path):
     mirror(tmp_path / "mirror")
@@ -139,3 +153,25 @@ def test_416_on_resume_downloads_again(tmp_path):
     assert "(416)" in log
     assert (tmp_path / "out" / "llm" / "model.gguf").read_bytes() == LLM
     assert not part.exists()
+
+
+FAILING_MV = """#!/bin/sh
+exit 1
+"""
+
+
+def test_failed_move_is_logged_and_nothing_is_overwritten(tmp_path):
+    mirror(tmp_path / "mirror")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "mv").write_text(FAILING_MV)
+    (bin_dir / "mv").chmod(0o755)
+    llm = tmp_path / "out" / "llm" / "model.gguf"
+    log = fetch(tmp_path, f"{bin_dir}:")
+    assert f"не удалось переместить {llm}.part в {llm}" in log
+    assert not llm.exists()
+    # своя модель не отложилась в .bad — поверх неё не качаем
+    llm.write_bytes(b"my-model")
+    log = fetch(tmp_path, f"{bin_dir}:")
+    assert f"не удалось переименовать {llm} в {llm}.bad" in log
+    assert "не скачиваю поверх" in log and llm.read_bytes() == b"my-model"
