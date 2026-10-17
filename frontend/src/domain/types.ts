@@ -387,6 +387,8 @@ export interface Attempt {
   events: TrainingEvent[];
   evaluation?: Evaluation;
   review?: TeacherReview;
+  /** id карточки на сервере, если попытка сдана в серверном занятии — по нему берётся оценка ИИ */
+  serverCardId?: string;
 }
 
 /** Состояние «прямо сейчас» — для мониторинга преподавателем в реальном времени */

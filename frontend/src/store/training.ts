@@ -53,6 +53,10 @@ export interface CardResult {
   scenario: Scenario;
   evaluation: Evaluation | null;
   recordedSteps?: number;
+  /** Карточка серверного занятия: итоговую оценку ставит сервер, локальный разбор — предварительный */
+  fromServer?: boolean;
+  /** id сданной карточки на сервере — по нему опрашивается оценка ИИ */
+  serverCardId?: string;
 }
 
 interface RunState {
@@ -466,12 +470,20 @@ export const useRun = create<RunState>((set, get) => {
             submittedAt: iso(cur.finishedAt),
             durationSeconds,
             timeDeltaSeconds: durationSeconds - s.norms.totalSec,
-          }).catch((e: unknown) => set({ sendError: describeError(e, 'Не удалось отправить карточку на сервер') }));
+          })
+            .then(({ cardId }) => {
+              // ответ мог прийти после «следующей карточки» — привязываем к своей попытке
+              const a = getDb().attempts.find((x) => x.id === cur.attemptId);
+              if (a) saveAttempt({ ...a, serverCardId: cardId });
+              const r = get().result;
+              if (r && get().current?.attemptId === cur.attemptId) set({ result: { ...r, serverCardId: cardId } });
+            })
+            .catch((e: unknown) => set({ sendError: describeError(e, 'Не удалось отправить карточку на сервер') }));
         }
       }
       set({
         current: cur,
-        result: { scenario: cur.scenario, evaluation },
+        result: { scenario: cur.scenario, evaluation, fromServer: !!(s.fromServer && s.sessionId) },
         history: [...s.history, { title: cur.scenario.title, score: evaluation.score, passed: evaluation.passed }],
       });
     },

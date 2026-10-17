@@ -4,6 +4,7 @@ import { useDb } from '../../api/db';
 import { dateTime } from '../../domain/format';
 import { SKILL_LABELS } from '../../domain/skills';
 import type { Attempt } from '../../domain/types';
+import { useServerScore } from '../../training/useServerScore';
 import { Badge, Button, Input, Modal, Notice, Textarea } from '../../ui';
 import { cx } from '../../ui/cx';
 
@@ -21,6 +22,8 @@ export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attemp
   const [score, setScore] = useState(String(attempt.review?.score ?? ev?.score ?? ''));
   const [saved, setSaved] = useState(false);
   const student = users.find((u) => u.id === attempt.studentId);
+  // попытка сдана в серверном занятии: итог — оценка на сервере, локальный балл — предварительный
+  const server = useServerScore(attempt.serverCardId);
 
   const EVENT_LABELS: Record<string, string> = {
     arrived: 'Поступила карточка',
@@ -49,6 +52,12 @@ export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attemp
         {ev && <Badge tone={ev.passed ? 'ok' : 'bad'}>{ev.passed ? 'Зачёт' : 'Незачёт'}</Badge>}
         {ev && <b className="text-c-text">{attempt.review?.score ?? ev.score} баллов</b>}
         {attempt.review?.score !== undefined && ev && attempt.review.score !== ev.score && <span>(авто: {ev.score})</span>}
+        {server && (
+          <span>
+            · {server.kind === 'score' ? <b className="text-c-text">{server.score} — {server.label}</b> : server.label}
+            {ev && ' (баллы выше — предварительно по правилам)'}
+          </span>
+        )}
       </div>
 
       {ev && (
