@@ -138,7 +138,8 @@ export function evaluateDds(
       points = 0;
       detail = 'Не было доклада руководителю смены';
     } else {
-      const { hit, missing } = matchGroups(transcript, exp.reportMustMention);
+      // доклад звучит по телефону и приходит из распознавания речи — корни нечётко, как на сервере
+      const { hit, missing } = matchGroups(transcript, exp.reportMustMention, { fuzzy: true });
       const total = exp.reportMustMention.length || 1;
       points = 4 + Math.round((hit / total) * 6);
       detail = missing.length ? `В докладе не прозвучало: ${missing.map((g) => `«${g[0]}…»`).join(', ')}` : 'Доклад содержит всё необходимое';

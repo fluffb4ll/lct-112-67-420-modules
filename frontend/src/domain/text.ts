@@ -12,13 +12,54 @@ export function normalize(text: string): string {
     .trim();
 }
 
+// Звуки, которые распознавание речи путает: звонкие и глухие, безударные гласные.
+// Алгоритм один в один с ai/src/dds_ai/bridge/rules.py — оценки фронта и сервера совпадают.
+const FOLD: Record<string, string> = { з: 'с', д: 'т', б: 'п', г: 'к', в: 'ф', ж: 'ш', о: 'а', е: 'и', я: 'и' };
+const FUZZY_MIN_STEM = 5;
+
+const fold = (s: string) => s.replace(/[здбгвжоея]/g, (c) => FOLD[c]);
+
+function levenshtein(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur.push(Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/**
+ * Корень узнан в слове с ошибкой распознавания. Префикс слова (длиной корня ±1 буква) после свёртки
+ * похожих звуков сравнивается с корнем: корни из 5–6 букв должны совпасть точно, длинные — с одной правкой.
+ * Короткие корни и числа («19», «лифт») так не сравниваются: «лист» — не «лифт».
+ */
+function fuzzyHit(words: string[], stem: string): boolean {
+  const n = stem.length;
+  if (n < FUZZY_MIN_STEM || !/^\p{L}+$/u.test(stem)) return false;
+  const budget = n <= 6 ? 0 : 1;
+  const target = fold(stem);
+  for (const w of words) {
+    if (w.length < n - 1) continue;
+    for (const k of [n - 1, n, n + 1]) if (k <= w.length && levenshtein(fold(w.slice(0, k)), target) <= budget) return true;
+  }
+  return false;
+}
+
 /**
  * Группы синонимов записаны корнями: [['передан', 'сообщ'], ['пик']].
  * Группа считается упомянутой, если в тексте есть хотя бы один её корень.
+ * `fuzzy` — для текста из распознавания речи (доклад руководителю): корень засчитывается
+ * и с типичной ошибкой STT («состревание» — «застре»). Набранный текст сверяется строго.
  */
-export function matchGroups(text: string, groups: string[][]): { hit: number; missing: string[][] } {
+export function matchGroups(text: string, groups: string[][], opts: { fuzzy?: boolean } = {}): { hit: number; missing: string[][] } {
   const t = normalize(text);
-  const missing = groups.filter((g) => !g.some((stem) => t.includes(normalize(stem))));
+  const words = opts.fuzzy ? t.split(' ') : [];
+  const hit = (stem: string) => {
+    const s = normalize(stem);
+    return t.includes(s) || (!!opts.fuzzy && fuzzyHit(words, s));
+  };
+  const missing = groups.filter((g) => !g.some(hit));
   return { hit: groups.length - missing.length, missing };
 }
 
