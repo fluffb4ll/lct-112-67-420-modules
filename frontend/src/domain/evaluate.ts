@@ -27,6 +27,15 @@ function lcs(a: string[], b: string[]): number {
   return dp[a.length][b.length];
 }
 
+/**
+ * round() как в Python (половина — к чётному): ИИ-контур считает баллы так же (bridge/rules.py),
+ * и при Math.round 4 + 4,5 давало бы 9 вместо 8.
+ */
+export function pyRound(x: number): number {
+  const r = Math.round(x);
+  return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
+}
+
 export function evaluateDds(
   events: TrainingEvent[],
   scenario: Scenario,
@@ -57,7 +66,7 @@ export function evaluateDds(
     let detail = 'Карточка не была открыта';
     if (openSec !== null) {
       points = openSec <= norms.openSec ? max : openSec <= norms.openSec * 2 ? 5 : 0;
-      detail = `Открыта через ${Math.round(openSec)} с при нормативе ${norms.openSec} с`;
+      detail = `Открыта через ${pyRound(openSec)} с при нормативе ${norms.openSec} с`;
     }
     checks.push({ id: 'open_time', title: 'Своевременное открытие карточки', ok: points === max, points, max, detail, ref: 'Памятка, стр. 5, 21', skill: 'timing' });
   }
@@ -100,7 +109,7 @@ export function evaluateDds(
     const max = 15;
     const { hit, missing } = matchGroups(allComments, exp.commentMustMention);
     const total = exp.commentMustMention.length;
-    const points = total === 0 ? max : Math.round((hit / total) * max);
+    const points = total === 0 ? max : pyRound((hit / total) * max);
     const skill: Skill = scenario.skills.includes('refusal_comment') ? 'refusal_comment' : scenario.skills.includes('work_progress') ? 'work_progress' : 'profile';
     const detail =
       total === 0
@@ -116,7 +125,7 @@ export function evaluateDds(
     const max = 15;
     const common = lcs(path, exp.path);
     const extra = path.filter((s) => !exp.path.includes(s));
-    let points = Math.round((common / exp.path.length) * max);
+    let points = pyRound((common / exp.path.length) * max);
     if (extra.length) points = Math.max(0, points - 5);
     const detail =
       `Проставлено: ${path.length ? path.map((s) => `«${s}»`).join(' → ') : '—'}. Эталон: ${exp.path.map((s) => `«${s}»`).join(' → ')}` +
@@ -141,7 +150,7 @@ export function evaluateDds(
       // доклад звучит по телефону и приходит из распознавания речи — корни нечётко, как на сервере
       const { hit, missing } = matchGroups(transcript, exp.reportMustMention, { fuzzy: true });
       const total = exp.reportMustMention.length || 1;
-      points = 4 + Math.round((hit / total) * 6);
+      points = 4 + pyRound((hit / total) * 6);
       detail = missing.length ? `В докладе не прозвучало: ${missing.map((g) => `«${g[0]}…»`).join(', ')}` : 'Доклад содержит всё необходимое';
     }
     checks.push({ id: 'report_call', title: 'Доклад руководителю', ok: points === max, points, max, detail, ref: 'Q&A заказчика, п. 6', skill: 'report' });
@@ -157,7 +166,7 @@ export function evaluateDds(
       ok: points === max,
       points,
       max,
-      detail: `${Math.round(totalSec)} с при нормативе ${norms.totalSec} с`,
+      detail: `${pyRound(totalSec)} с при нормативе ${norms.totalSec} с`,
       ref: 'Q&A заказчика, п. 13',
       skill: 'timing',
     });

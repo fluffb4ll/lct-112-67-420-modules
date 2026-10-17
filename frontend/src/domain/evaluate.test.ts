@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SEED_SCENARIOS } from '../data/scenarios';
-import { DEFAULT_NORMS, evaluateDds } from './evaluate';
+import { DEFAULT_NORMS, evaluateDds, pyRound } from './evaluate';
 import type { Scenario, TrainingEvent } from './types';
 
 const lift = SEED_SCENARIOS.find((s) => s.id === 'sc-lift-praktika')!;
@@ -65,5 +65,20 @@ describe('evaluateDds', () => {
   it('комментарий с тем же искажением сверяется строго', () => {
     const c = check(run('Кировоградская 22 лифт', { comment: 'Не обслуживаем, сообщено в Прахтику.' }), 'comment_content');
     expect(c.ok).toBe(false);
+  });
+});
+
+describe('pyRound', () => {
+  it('половина — к чётному, как round() в Python', () => {
+    expect([0.5, 1.5, 2.5, 4.5, -2.5, -3.5].map(pyRound)).toEqual([0, 2, 2, 4, -2, -4]);
+    expect([2.4, 2.6, 7].map(pyRound)).toEqual([2, 3, 7]);
+  });
+
+  it('доклад: 3 из 4 групп — 8 баллов, как на сервере (4 + round(4.5))', () => {
+    const scenario: Scenario = {
+      ...lift,
+      expected: { ...lift.expected, reportMustMention: [['кировоградск'], ['22'], ['лифт'], ['практик']] },
+    };
+    expect(evaluate(run('Кировоградская 22, лифт'), scenario).checks.find((c) => c.id === 'report_call')!.points).toBe(8);
   });
 });
