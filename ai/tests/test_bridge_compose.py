@@ -98,6 +98,29 @@ def test_title_giving_away_complication_is_rejected():
     assert "title" in out["rejected"]
 
 
+def test_spoiler_with_punctuation_is_caught():
+    out = compose_scenario(
+        {"scenario": draft(), "complication": "zone"},
+        answer(
+            description="Женщина застряла в лифте. Звонили в Д.Д.С., там сказали — дом чужая УК."
+        ),
+    )
+    assert "description" in out["rejected"]
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"incident": None},
+        {"incident": {"descriptions": []}},
+        {"expected": "x"},
+    ],
+)
+def test_malformed_draft_is_value_error(broken):
+    with pytest.raises(ValueError):
+        compose_scenario({"scenario": {**draft(), **broken}}, None)
+
+
 def test_without_llm_returns_template():
     out = compose_scenario({"scenario": draft()}, None)
     assert out["by"] == "template" and out["scenario"] == draft()

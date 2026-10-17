@@ -131,3 +131,9 @@ def test_incomplete_whisper_dir_is_not_offered(tmp_path):
     assert svc.capabilities()["stt"] is False
     (tmp_path / "model.bin").write_bytes(b"x")
     assert svc.capabilities()["stt"] is True
+
+
+def test_oversized_recording_is_413(monkeypatch):
+    monkeypatch.setattr("dds_ai.service.app.MAX_AUDIO_BYTES", 4)
+    c = client(VoiceService(stt=SpeakingSTT(), tts=FakeTTS(), env={}))
+    assert c.post("/v1/stt", content=b"x" * 10).status_code == 413

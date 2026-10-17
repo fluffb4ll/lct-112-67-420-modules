@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 
 from ..ports import LLMProvider
@@ -46,11 +47,13 @@ SPOILERS = (
     "не должн",
     "дубл",
     "организац",
-    "чужой",
+    "чуж",
     "проводить не будут",
     "зарегистрирован",
     "не наш",
     "отказ от",
+    "откаж",
+    "отказыва",
 )
 
 DIFFICULTY_HINTS = {
@@ -120,19 +123,41 @@ def _text(value: Any, lo: int, hi: int) -> str | None:
     return s if lo <= len(s) <= hi else None
 
 
+def _letters(text: str) -> str:
+    # «Д.Д.С.», «д-д-с» и «не  наш» сводим к буквам, чтобы их не пропустить
+    return re.sub(r"[^а-яёa-z]+", "", text.lower())
+
+
 def _spoils(text: str) -> bool:
-    low = text.lower()
-    return any(s in low for s in SPOILERS)
+    low = _letters(text)
+    return any(_letters(s) in low for s in SPOILERS)
+
+
+def _check_shape(draft: dict[str, Any]) -> None:
+    inc = draft.get("incident")
+    if not isinstance(inc, dict):
+        raise ValueError("scenario.incident is required")
+    desc = inc.get("descriptions")
+    if not isinstance(desc, list) or not desc or not isinstance(desc[0], dict):
+        raise ValueError("scenario.incident.descriptions must be a non-empty list")
+    for key in ("expected",):
+        if draft.get(key) is not None and not isinstance(draft[key], dict):
+            raise ValueError(f"scenario.{key} must be an object")
+    if draft.get("inputs") is not None and not isinstance(draft["inputs"], list):
+        raise ValueError("scenario.inputs must be a list")
 
 
 def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str, Any]:
     draft = body.get("scenario")
     if not isinstance(draft, dict):
         raise ValueError("scenario is required")
+    _check_shape(draft)
     complication = str(body.get("complication") or "none")
     difficulty = int(body.get("difficulty") or draft.get("difficulty") or 1)
     scenario = copy.deepcopy(draft)
-    exp = scenario.setdefault("expected", {})
+    if not isinstance(scenario.get("expected"), dict):
+        scenario["expected"] = {}
+    exp = scenario["expected"]
 
     out = ask_json(
         llm,

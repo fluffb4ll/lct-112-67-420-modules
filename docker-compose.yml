@@ -60,7 +60,8 @@ services:
       models:
         condition: service_completed_successfully
     ports:
-      - "${AI_PORT:-8090}:8090"
+      # ИИ-контур нужен только бэкенду и nginx внутри сети compose; наружу — лишь на localhost
+      - "${AI_BIND:-127.0.0.1}:${AI_PORT:-8090}:8090"
     volumes:
       - ai_models:/models
     healthcheck:

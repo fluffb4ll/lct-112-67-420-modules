@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from dds_ai import __version__
 from dds_ai.bridge.compose import compose_scenario
 from dds_ai.bridge.evaluate import evaluate_card
-from dds_ai.bridge.voice import VoiceService, VoiceUnavailable
+from dds_ai.bridge.voice import MAX_AUDIO_BYTES, VoiceService, VoiceUnavailable
 from dds_ai.contracts import CONTRACTS_VERSION, SCHEMA_MODELS
 from dds_ai.contracts.events import DispatcherDecision, attempt_event_adapter
 from dds_ai.contracts.rubric import Rubric
@@ -166,7 +166,14 @@ def create_app(
     @app.post("/api/v1/ai/evaluate")
     def evaluate_submitted_card(body: dict[str, Any]) -> dict[str, Any]:
         # sync-обработчик: FastAPI выполняет его в пуле потоков, LLM не блокирует цикл событий
-        return evaluate_card(body, llm)
+        try:
+            return evaluate_card(body, llm)
+        except Exception:
+            if llm is None:
+                raise
+            # сбой судьи не должен оставлять карточку без оценки — считаем по правилам
+            log.exception("LLM evaluation failed, falling back to rules")
+            return evaluate_card(body, None)
 
     # --- мост к фронту (frontend/src/api/ai.ts, через nginx /ai/) ---
 
@@ -174,7 +181,7 @@ def create_app(
     def compose(body: dict[str, Any]) -> dict[str, Any]:
         try:
             return compose_scenario(body, llm)
-        except (ValueError, KeyError, TypeError) as exc:
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
             raise HTTPException(422, f"bad scenario draft: {exc}") from exc
 
     @app.get("/v1/voice")
@@ -184,7 +191,16 @@ def create_app(
     @app.post("/v1/stt")
     async def stt(request: Request, hints: str = "") -> dict[str, Any]:
         # тело — сама запись (audio/webm, ogg, wav): без multipart, чтобы не тянуть зависимость
-        audio = await request.body()
+        if int(request.headers.get("content-length") or 0) > MAX_AUDIO_BYTES:
+            raise HTTPException(413, "запись слишком длинная")
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_AUDIO_BYTES:
+                raise HTTPException(413, "запись слишком длинная")
+            chunks.append(chunk)
+        audio = b"".join(chunks)
         try:
             words = [h for h in hints.split(",") if h]
             return await run_in_threadpool(voice.transcribe, audio, words)
