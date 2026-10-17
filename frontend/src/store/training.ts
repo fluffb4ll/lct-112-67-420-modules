@@ -452,6 +452,7 @@ export const useRun = create<RunState>((set, get) => {
         finishedAt: iso(cur.finishedAt),
         events,
         evaluation,
+        passScore: s.norms.passScore,
       });
       // занятие с сервера: отправляем заполненную карточку на оценку
       const serverSession = !!(s.fromServer && s.sessionId);

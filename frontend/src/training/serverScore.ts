@@ -1,4 +1,6 @@
 import type { Evaluation as ServerEvaluation } from '../api/sessions';
+import { DEFAULT_NORMS } from '../domain/evaluate';
+import type { Attempt } from '../domain/types';
 
 /*
  * Какую цифру оценки показать обучающемуся за карточку серверного занятия. Итог ставит сервер
@@ -46,4 +48,14 @@ export function scoreBadge(
 ): { score: number; passed: boolean; label: string } {
   if (server?.kind === 'score') return { score: server.score, passed: server.score >= passScore, label: server.label };
   return { score: local.score, passed: local.passed, label: fromServer ? PRELIMINARY_LABEL : local.passed ? 'зачёт' : 'незачёт' };
+}
+
+/**
+ * Вердикт «Зачёт/Незачёт» в подробностях попытки — как плашка в ResultModal: при готовой серверной
+ * оценке по ней и порогу занятия, иначе локальный разбор. null — попытка не оценена.
+ */
+export function attemptVerdict(attempt: Pick<Attempt, 'evaluation' | 'passScore' | 'serverCardId'>, server: ServerScoreView | null): boolean | null {
+  const ev = attempt.evaluation;
+  if (!ev) return null;
+  return scoreBadge(ev, server, !!attempt.serverCardId, attempt.passScore ?? DEFAULT_NORMS.passScore).passed;
 }

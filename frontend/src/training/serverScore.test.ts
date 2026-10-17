@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Evaluation as ServerEvaluation } from '../api/sessions';
-import { evaluationOfCard, PRELIMINARY_LABEL, scoreBadge, serverScoreView, serverStatusLine } from './serverScore';
+import type { Attempt } from '../domain/types';
+import { attemptVerdict, evaluationOfCard, PRELIMINARY_LABEL, scoreBadge, serverScoreView, serverStatusLine } from './serverScore';
 
 const base: ServerEvaluation = {
   id: 'e1',
@@ -86,5 +87,24 @@ describe('scoreBadge', () => {
   it('пока оценки сервера нет — локальная, помеченная как предварительная', () => {
     expect(scoreBadge({ score: 90, passed: true }, { kind: 'pending', label: '…' }, true, 70)).toEqual({ score: 90, passed: true, label: PRELIMINARY_LABEL });
     expect(scoreBadge({ score: 50, passed: false }, null, false, 70).label).toBe('незачёт');
+  });
+});
+
+describe('attemptVerdict', () => {
+  const evaluation = { score: 90, passed: true } as Attempt['evaluation'];
+
+  it('серверная оценка ниже порога занятия — «Незачёт», хотя локально зачёт', () => {
+    expect(attemptVerdict({ evaluation, serverCardId: 'c1', passScore: 70 }, { kind: 'score', score: 40, label: 'оценка ИИ' })).toBe(false);
+  });
+
+  it('порог берётся из попытки, без него — по умолчанию', () => {
+    const server = { kind: 'score', score: 75, label: 'оценка ИИ' } as const;
+    expect(attemptVerdict({ evaluation, serverCardId: 'c1', passScore: 80 }, server)).toBe(false);
+    expect(attemptVerdict({ evaluation, serverCardId: 'c1' }, server)).toBe(true);
+  });
+
+  it('без серверной оценки — локальный вердикт; без разбора — null', () => {
+    expect(attemptVerdict({ evaluation }, null)).toBe(true);
+    expect(attemptVerdict({}, null)).toBeNull();
   });
 });
