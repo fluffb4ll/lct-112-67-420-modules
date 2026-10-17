@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PageResponse } from '../../api/admin';
 import { mutate } from '../../api/db';
-import { composeScenario, isAiRateLimited } from '../../api/ai';
+import { composeScenario } from '../../api/ai';
 import { describeError } from '../../api/errors';
 import { COMPLICATION_LABELS, generateScenarios, loadClassifier, upravaGroups, type Classifier, type Complication } from '../../api/generator';
 import {
@@ -18,7 +18,7 @@ import { navigate } from '../../app/router';
 import { ddmmyyyy } from '../../domain/format';
 import { useMe } from '../../store/session';
 import { Badge, Button, Checkbox, Empty, Input, Modal, Notice, Panel, Select, Table, Tabs } from '../../ui';
-import { composedOrigin, composeNote } from './composeNote';
+import { composeAndSave, generateMessage, type GenerateOutcome } from './composeNote';
 import { STATUS_LABELS } from './labels';
 
 /*
@@ -192,21 +192,11 @@ export function ScenarioBank() {
           categories={categories}
           authorId={user.id}
           onClose={() => setGen(false)}
-          onDone={(n, failed, byTemplate, limited) => {
+          onDone={(outcome, total) => {
             setGen(false);
             setFilter('DRAFT');
             setPage(0);
-            setMsg(
-              failed
-                ? { tone: 'bad', text: `Сохранено черновиков: ${n}. Не удалось сохранить: ${failed}.` }
-                : {
-                    tone: 'ok',
-                    text:
-                      `Сгенерировано черновиков: ${n}` +
-                      composeNote(byTemplate, limited) +
-                      '. Проверьте эталон и утвердите — после этого сценарии попадут в общий банк.',
-                  },
-            );
+            setMsg(generateMessage(outcome, total));
             void reload();
           }}
         />
@@ -224,7 +214,7 @@ function GenerateModal({
   categories: IncidentCategory[] | null;
   authorId: string;
   onClose: () => void;
-  onDone: (saved: number, failed: number, byTemplate: number, limited: number) => void;
+  onDone: (outcome: GenerateOutcome, total: number) => void;
 }) {
   const [c, setC] = useState<Classifier | null>(null);
   const [group, setGroup] = useState('');
@@ -266,43 +256,23 @@ function GenerateModal({
     setBusy(true);
     setErr('');
     const list = generateScenarios(c, { group, difficulty, complications: comps, count, authorId });
-    let saved = 0;
-    let failed = 0;
-    let byTemplate = 0;
-    let limited = 0;
-    for (const [i, draft] of list.entries()) {
-      if (closed.current) break;
-      setProgress(`ИИ пишет сценарий ${i + 1} из ${list.length}…`);
-      // текст пишет языковая модель ИИ-контура; контур недоступен — остаётся текст шаблона.
-      // Пометка «Сгенерирован ИИ» — только если текст действительно написала модель, иначе «по шаблону»
-      const comp = (comps.length ? comps : (['none'] as Complication[]))[i % Math.max(comps.length, 1)];
-      const sc = await composeScenario(draft, comp, difficulty).then(
-        (r) => {
-          if (r.by !== 'llm') byTemplate++;
-          return { ...r.scenario, origin: composedOrigin(r) };
-        },
-        (e: unknown) => {
-          byTemplate++;
-          if (isAiRateLimited(e)) limited++;
-          return { ...draft, origin: composedOrigin(null) };
-        },
-      );
-      if (closed.current) break;
-      try {
+    const outcome = await composeAndSave(list, {
+      // текст пишет языковая модель ИИ-контура; контур недоступен — остаётся текст шаблона
+      compose: (draft, i) => composeScenario(draft, (comps.length ? comps : (['none'] as Complication[]))[i % Math.max(comps.length, 1)], difficulty),
+      save: async (sc) => {
         const { scenarioId } = await createScenarioOnServer(toBody(sc, chosen));
         // зеркалим в локальные данные: занятия и тренажёр пока работают на них
         mutate((d) => d.scenarios.unshift({ ...sc, id: scenarioId }));
-        saved++;
-      } catch (e) {
-        failed++;
-        setErr(describeError(e, 'Не удалось сохранить сценарий'));
-      }
-    }
+      },
+      closed: () => closed.current,
+      onProgress: (i) => setProgress(`ИИ пишет сценарий ${i + 1} из ${list.length}…`),
+      onSaveError: (e) => setErr(describeError(e, 'Не удалось сохранить сценарий')),
+    });
     if (!closed.current) {
       setBusy(false);
       setProgress('');
     }
-    if (saved) onDone(saved, failed, byTemplate, limited);
+    if (outcome.saved || (outcome.stoppedByLimit && !closed.current)) onDone(outcome, list.length);
   };
 
   return (
