@@ -19,6 +19,8 @@ import {
 import { listStudyGroups, type StudyGroupRow } from '../../api/teacher';
 import { dateTime } from '../../domain/format';
 import { useMe } from '../../store/session';
+import { CardBadge } from '../shared/CardBadge';
+import { useCardEvaluations } from '../../training/cardEvaluations';
 import { pollUntil } from '../../training/pollUntil';
 import { Badge, Button, Checkbox, ConfirmModal, Empty, Input, Modal, Notice, Panel, Select, Table, Textarea } from '../../ui';
 
@@ -278,6 +280,7 @@ function SessionModal({ id, onClose }: { id: string; onClose: () => void }) {
   const [data, setData] = useState<SessionDetails | null>(null);
   const [err, setErr] = useState('');
   const [scoreFor, setScoreFor] = useState<CardSummary | null>(null);
+  const evals = useCardEvaluations(data?.cards);
 
   const load = useCallback(
     () =>
@@ -335,7 +338,7 @@ function SessionModal({ id, onClose }: { id: string; onClose: () => void }) {
                   <td className={`text-[12px] whitespace-nowrap ${(c.timeDeltaSeconds ?? 0) > 0 ? 'text-c-bad' : 'text-c-muted'}`}>
                     {c.timeDeltaSeconds == null ? '—' : c.timeDeltaSeconds > 0 ? `+${c.timeDeltaSeconds} с` : 'в норматив'}
                   </td>
-                  <td>{c.status === 'EVALUATED' ? <Badge tone="ok">оценена</Badge> : <Badge tone="warn">ждёт оценки</Badge>}</td>
+                  <td><CardBadge status={c.status} ev={evals[c.id]} /></td>
                   <td>
                     <div className="flex justify-end">
                       <Button size="sm" variant="ghost" onClick={() => setScoreFor(c)}>

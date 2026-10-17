@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Evaluation as ServerEvaluation } from '../api/sessions';
 import type { Attempt } from '../domain/types';
-import { attemptVerdict, evaluationOfCard, PRELIMINARY_LABEL, scoreBadge, serverScoreView, serverStatusLine } from './serverScore';
+import { attemptVerdict, cardStatusBadge, evaluationOfCard, PRELIMINARY_LABEL, scoreBadge, serverScoreView, serverStatusLine } from './serverScore';
 
 const base: ServerEvaluation = {
   id: 'e1',
@@ -106,5 +106,24 @@ describe('attemptVerdict', () => {
   it('без серверной оценки — локальный вердикт; без разбора — null', () => {
     expect(attemptVerdict({ evaluation }, null)).toBe(true);
     expect(attemptVerdict({}, null)).toBeNull();
+  });
+});
+
+describe('cardStatusBadge — статус карточки в списках', () => {
+  it('ИИ-контур не ответил — «оценка ИИ недоступна», а не «ждёт оценки»', () => {
+    expect(cardStatusBadge('SUBMITTED', { ...base, aiStatus: 'UNAVAILABLE' })).toEqual({ tone: 'bad', text: 'оценка ИИ недоступна' });
+    expect(cardStatusBadge('SUBMITTED', { ...base, aiStatus: 'OK', aiScore: null })).toEqual({ tone: 'bad', text: 'оценка ИИ недоступна' });
+  });
+
+  it('ИИ ещё оценивает или оценка не загружена — «ждёт оценки»', () => {
+    expect(cardStatusBadge('SUBMITTED', base)).toEqual({ tone: 'warn', text: 'ждёт оценки' });
+    expect(cardStatusBadge('SUBMITTED', null)).toEqual({ tone: 'warn', text: 'ждёт оценки' });
+  });
+
+  it('есть балл — «оценена» с итоговой цифрой', () => {
+    expect(cardStatusBadge('EVALUATED', { ...base, aiStatus: 'OK', aiScore: 80, finalScore: 80 })).toEqual({ tone: 'ok', text: 'оценена: 80' });
+    // преподаватель выставил балл поверх недоступного ИИ
+    expect(cardStatusBadge('EVALUATED', { ...base, aiStatus: 'UNAVAILABLE', teacherScore: 70, finalScore: 70 })).toEqual({ tone: 'ok', text: 'оценена: 70' });
+    expect(cardStatusBadge('EVALUATED', undefined)).toEqual({ tone: 'ok', text: 'оценена' });
   });
 });
