@@ -81,6 +81,15 @@ def test_chief_reply_losing_organisation_is_rejected():
     assert out["scenario"]["chiefReply"] == draft()["chiefReply"]
 
 
+def test_description_giving_away_complication_is_rejected():
+    out = compose_scenario(
+        {"scenario": draft(), "complication": "zone"},
+        answer(description="Застряли в лифте. Дом обслуживает другая организация, ДДС не едет."),
+    )
+    assert "description" in out["rejected"]
+    assert out["scenario"]["incident"]["descriptions"][0]["text"] == "Застревание в лифте."
+
+
 def test_without_llm_returns_template():
     out = compose_scenario({"scenario": draft()}, None)
     assert out["by"] == "template" and out["scenario"] == draft()

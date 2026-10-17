@@ -37,6 +37,7 @@ docker compose up -d --build
 
 При первом запуске сервис `models` один раз скачивает веса ИИ-контура в том `ai_models`
 (около 1,7 ГБ: LLM Qwen2.5-1.5B GGUF, faster-whisper small, голоса Piper irina и denis).
+Сайт откроется только после окончания загрузки (`docker compose logs -f models` — прогресс).
 После этого всё работает без сети. Отключить докачку: `DDS_FETCH_MODELS=0`; другая LLM:
 `DDS_LLM_MODEL_URL=<ссылка на .gguf>` (файл ляжет в `/models/llm/model.gguf`).
 

@@ -38,6 +38,17 @@ COMPLICATION_HINTS = {
     "progress": "служба отрабатывает происшествие полностью: выезд, прибытие, завершение работ",
 }
 DEFAULT_HINT = "обычное происшествие в зоне ответственности службы"
+# особенность выясняет обучающийся; описание со слов заявителя её выдавать не должно
+SPOILERS = (
+    "ддс",
+    "реагир",
+    "не должн",
+    "дубл",
+    "организац",
+    "чужой",
+    "проводить не будут",
+    "зарегистрирован",
+)
 
 DIFFICULTY_HINTS = {
     1: "заявитель спокоен и говорит чётко",
@@ -72,7 +83,8 @@ def _prompt(scenario: dict[str, Any], complication: str, difficulty: int) -> str
         f"Признаки: {', '.join(typ.get('signs') or [])}",
         f"Адрес: {_address(scenario)}",
         f"Заявитель: {applicant.get('name', '')}, {applicant.get('status', '')}",
-        f"Особенность: {COMPLICATION_HINTS.get(complication, DEFAULT_HINT)}",
+        "Скрытая особенность (диспетчер выясняет её сам — в description и inputs не упоминай): "
+        + COMPLICATION_HINTS.get(complication, DEFAULT_HINT),
         f"Сложность: {DIFFICULTY_HINTS.get(difficulty, DIFFICULTY_HINTS[1])}",
         f"Верные действия диспетчера: статусы {' → '.join(exp.get('path') or [])}",
         f"Эталонные комментарии: {'; '.join(f'{k}: {v}' for k, v in samples.items())}",
@@ -105,6 +117,11 @@ def _text(value: Any, lo: int, hi: int) -> str | None:
     return s if lo <= len(s) <= hi else None
 
 
+def _spoils(text: str) -> bool:
+    low = text.lower()
+    return any(s in low for s in SPOILERS)
+
+
 def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str, Any]:
     draft = body.get("scenario")
     if not isinstance(draft, dict):
@@ -127,10 +144,11 @@ def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str,
         if title := _text(out.get("title"), 8, 120):
             scenario["title"] = title
             applied.append("title")
-        if (desc := _text(out.get("description"), 30, 700)) is not None:
+        desc = _text(out.get("description"), 30, 700)
+        if desc is not None and not _spoils(desc):
             scenario["incident"]["descriptions"][0]["text"] = desc
             applied.append("description")
-        else:
+        elif out.get("description"):
             rejected.append("description")
 
         # ответ руководителя должен сохранить организацию, куда передаётся информация
