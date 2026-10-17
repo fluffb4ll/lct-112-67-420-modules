@@ -43,9 +43,10 @@ docker compose up -d --build
 
 ### 3. Доступ к сервисам
 - **Фронтенд**: [http://localhost](http://localhost) (порт `80` по умолчанию)
-- **Бэкенд API**: [http://localhost:8080](http://localhost:8080)
+- **Бэкенд API**: [http://localhost:8080](http://localhost:8080) — только с этой машины (`BACKEND_BIND=127.0.0.1`);
+  фронт ходит к API через nginx
 - **ИИ-сервис**: [http://localhost:8090](http://localhost:8090) — только с этой машины (`AI_BIND=127.0.0.1`)
-- **База данных PostgreSQL**: `localhost:5432`
+- **База данных PostgreSQL**: `localhost:5432` — только с этой машины (`POSTGRES_BIND=127.0.0.1`)
 
 ---
 
@@ -164,7 +165,9 @@ docker run --rm -v "$PWD/backend":/app -v lct-m2:/root/.m2 -w /app eclipse-temur
   на вход (голос — 2 запроса/с, генерация — 20 в минуту) и на адрес; сверх лимита — 429.
   Фронт на 401/429 откатывается на браузерный голос и текст шаблона.
   Проверка: `bash frontend/docker/check-ai-proxy.sh` (поднимает nginx с заглушками изолированно).
-  В разработке (`npm run dev`) Vite проксирует `/ai/` к контуру напрямую, без входа и лимитов.
+  В разработке (`npm run dev`, `vite preview`) то же делает `frontend/dev/aiDevGuard.ts`: вход
+  проверяется на бэкенде `VITE_API_TARGET`, наружу те же четыре ручки, но лимитов частоты нет —
+  не открывайте dev-сервер в сеть (`vite --host`) при запущенном ИИ-контуре.
 - **Порт 8090** опубликован только на `127.0.0.1` (`AI_BIND`). Бэкенд и nginx ходят к ИИ-контуру
   по сети compose.
 - **После финала смените демо-пароли** — `admin/admin123` и тестовых учёток `i.ivanov/teacher123`,
@@ -174,5 +177,8 @@ docker run --rm -v "$PWD/backend":/app -v lct-m2:/root/.m2 -w /app eclipse-temur
   вместе с новой БД — иначе ни один сохранённый пароль не подойдёт. `POSTGRES_PASSWORD` тоже демо
   (`dds_password` без `.env`, `dds_password_secret` из `.env.example`) и задаётся только при создании
   тома `pgdata`.
-- **Порты 8080 и 5432** в compose опубликованы на все интерфейсы. На публичном стенде закройте
-  их файрволом или задайте `BACKEND_PORT=127.0.0.1:8080`, `POSTGRES_PORT=127.0.0.1:5432` в `.env`.
+- **Порты 8080 и 5432** тоже опубликованы только на `127.0.0.1` (`BACKEND_BIND`, `POSTGRES_BIND`):
+  фронт ходит к API через nginx, бэкенд к БД — по сети compose. Если к этому бэкенду ходит Vite dev
+  с другой машины (Raspberry Pi в Tailscale), задайте в `.env` `BACKEND_BIND=<адрес в Tailscale>`
+  (`0.0.0.0` откроет 8080 всем); БД наружу открывать не нужно. Старый вид `BACKEND_PORT=127.0.0.1:8080`
+  больше не работает — в `*_PORT` теперь только номер порта.
