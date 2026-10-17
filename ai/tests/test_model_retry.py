@@ -1,9 +1,6 @@
 """Повтор загрузки моделей: LLM и голос пробуются снова с растущей паузой, без перезапуска."""
 
 import pytest
-
-pytest.importorskip("httpx")
-
 from fastapi.testclient import TestClient
 
 from dds_ai.backoff import Backoff

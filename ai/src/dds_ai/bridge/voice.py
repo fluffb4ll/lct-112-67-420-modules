@@ -124,7 +124,8 @@ def _download(
             left = deadline - clock()
             if left <= 0:
                 raise TimeoutError(f"скачивание голоса дольше {timeout_s:g} с")
-            # тайм-аут сокета — не дольше оставшегося срока: одно чтение не переживёт дедлайн
+            # тайм-аут сокета задаётся на соединение и действует на каждое чтение: срок
+            # проверяется между чтениями, зависшее чтение превысит его не больше чем на 60 с
             with (
                 urllib.request.urlopen(url + suffix, timeout=max(1.0, min(60.0, left))) as r,
                 open(tmp, "wb") as f,
