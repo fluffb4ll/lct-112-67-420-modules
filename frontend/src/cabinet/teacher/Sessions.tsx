@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { PageResponse } from '../../api/admin';
 import { describeError } from '../../api/errors';
+import { ApiError } from '../../api/http';
 import { listScenarios, type ScenarioRow } from '../../api/scenarios';
 import {
   endSession,
@@ -406,7 +407,13 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
     try {
       setEvaluation(await requestAiEvaluation(card.id));
     } catch (e) {
-      setErr(describeError(e, 'ИИ-контур не ответил'));
+      // 503 — ИИ-контур недоступен: показываем текст сервера и перечитываем статус оценки
+      if (e instanceof ApiError && e.status === 503) {
+        setErr(e.message);
+        void getEvaluation(card.id).then(setEvaluation, () => undefined);
+      } else {
+        setErr(describeError(e, 'ИИ-контур не ответил'));
+      }
     } finally {
       setBusy(false);
     }
@@ -436,6 +443,10 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
           <Notice tone="neutral">Оценка ИИ ещё не готова или недоступна — можно выставить свою.</Notice>
         ) : (
           <div className="border border-c-line p-3 text-[13px]">
+            {evaluation.aiStatus === 'UNAVAILABLE' && (
+              <Notice tone="warn">ИИ-контур недоступен — оценки ИИ нет. Запросите заново позже или выставьте свою.</Notice>
+            )}
+            {evaluation.aiStatus === 'PENDING' && <Notice tone="neutral">ИИ оценивает карточку…</Notice>}
             <div>
               <b>Оценка ИИ:</b> {evaluation.aiScore ?? '—'}
               {evaluation.finalScore != null && <span className="text-c-muted"> · итог {evaluation.finalScore}</span>}

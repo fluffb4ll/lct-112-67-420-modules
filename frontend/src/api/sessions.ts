@@ -146,6 +146,8 @@ export interface Evaluation {
   aiGrammarScore: Record<string, unknown> | null;
   aiComplianceErrors: Record<string, unknown> | null;
   aiRecommendations: string | null;
+  /** Состояние оценки ИИ: PENDING — идёт, UNAVAILABLE — ИИ-контур не ответил. */
+  aiStatus?: 'PENDING' | 'OK' | 'UNAVAILABLE' | null;
   teacherScore: number | null;
   teacherComment: string | null;
   evaluatedById: string | null;
