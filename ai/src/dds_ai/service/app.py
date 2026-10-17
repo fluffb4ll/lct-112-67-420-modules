@@ -88,7 +88,11 @@ def _load_models() -> tuple[LLMProvider | None, SemanticJudge | None]:
         from dds_ai.judging import LLMSemanticJudge
         from dds_ai.llm.llamacpp_provider import LlamaCppProvider
 
-        llm = LlamaCppProvider(path, n_ctx=int(os.environ.get("DDS_LLM_N_CTX", "4096")))
+        llm = LlamaCppProvider(
+            path,
+            model_name=os.environ.get("DDS_LLM_MODEL_NAME") or None,
+            n_ctx=int(os.environ.get("DDS_LLM_N_CTX", "4096")),
+        )
     except Exception as exc:
         log.warning("LLM не загружена (%s) — оценка и сценарии по правилам", exc)
         return None, None

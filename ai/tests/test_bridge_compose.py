@@ -143,3 +143,66 @@ def test_route(monkeypatch):
     r = client.post("/v1/scenarios/compose", json={"scenario": draft(), "complication": "zone"})
     assert r.status_code == 200 and r.json()["by"] == "llm"
     assert client.post("/v1/scenarios/compose", json={}).status_code == 422
+
+
+def test_draft_echo_is_not_applied():
+    # реальный случай (сценарий b7392178): модель вернула описание шаблона с адресом в конце,
+    # `applied` было с description, а в банк ушёл шаблонный текст «Признаки: …»
+    d = draft("progress")
+    d["title"] = "Застревание в лифте, Кировоградская, 15"
+    d["incident"]["descriptions"][0]["text"] = "Застревание в лифте. Признаки: лифт, застревание."
+    out = compose_scenario(
+        {"scenario": d, "complication": "progress"},
+        answer(
+            title="Застревание в лифте, Кировоградская, 15.",
+            description="Застревание в лифте. Признаки: лифт, застревание. "
+            "Кировоградская улица, д. 15.",
+            chief_reply=d["chiefReply"],
+            sample_report=d["expected"]["sampleReport"],
+            inputs=["Выехали."],
+        ),
+    )
+    assert out["by"] == "template" and out["applied"] == []
+    assert {"title", "description"} <= set(out["rejected"])
+    assert out["scenario"] == d
+
+
+def test_echo_rejection_is_logged_without_user_text(caplog):
+    d = draft("progress")
+    echo = d["incident"]["descriptions"][0]["text"] + " Кировоградская улица, д. 15, подъезд 2."
+    with caplog.at_level("INFO", logger="dds_ai.bridge.compose"):
+        compose_scenario({"scenario": d, "complication": "progress"}, answer(description=echo))
+    log = caplog.text
+    assert "description" in log and "повтор" in log
+    assert "Кировоградская" not in log
+
+
+def test_words_like_ne_nashli_are_not_spoilers():
+    out = compose_scenario(
+        {"scenario": draft(), "complication": "zone"},
+        answer(
+            description="Женщина застряла в лифте между 7 и 8 этажами. Соседи пытались помочь, "
+            "но не нашли ключ от машинного отделения."
+        ),
+    )
+    assert "description" in out["applied"]
+
+
+def test_spoilers_checked_only_for_hidden_complications():
+    text = "Застряли в лифте. Соседи вызвали аварийную организацию, ждут на площадке."
+    progress = compose_scenario(
+        {"scenario": draft("progress"), "complication": "progress"}, answer(description=text)
+    )
+    zone = compose_scenario({"scenario": draft(), "complication": "zone"}, answer(description=text))
+    assert "description" in progress["applied"]
+    assert "description" in zone["rejected"]
+
+
+def test_prompt_does_not_ask_to_rewrite_template_text():
+    llm = answer()
+    d = draft()
+    d["incident"]["descriptions"][0]["text"] = "Шаблон. Признаки: лифт, застревание."
+    compose_scenario({"scenario": d, "complication": "zone"}, llm)
+    prompt = llm.prompts[0]
+    assert "Признаки: лифт, застревание." not in prompt
+    assert d["title"] not in prompt

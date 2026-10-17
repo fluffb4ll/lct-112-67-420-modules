@@ -106,7 +106,10 @@ class LlamaCppProvider:
         self.chat = chat
         self.model_ref = ModelRef(
             component="llm",
-            model_name=model_name or path.stem,
+            # в стенде файл зовётся model.gguf — имя из метаданных GGUF понятнее, чем «model»
+            model_name=model_name
+            or (getattr(self._llm, "metadata", None) or {}).get("general.name")
+            or path.stem,
             model_version=model_version or file_fingerprint(path),
         )
 

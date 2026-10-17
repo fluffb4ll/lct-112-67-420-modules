@@ -5,17 +5,29 @@
 структуру строят правила — от них зависит оценка, их модель не трогает. Модель пишет живой текст:
 название, описание происшествия со слов заявителя, ответ руководителя, эталонный доклад и реплики
 исполнителей. Каждое поле проверяется; не прошло проверку — остаётся текст шаблона.
+
+Проверки поля (причина отказа пишется в лог INFO, без текста сценария):
+- длина в пределах поля;
+- не повтор шаблона: маленькая модель любит вернуть черновик слово в слово и дописать адрес
+  (так было со сценарием b7392178: `applied` с description, а в банке шаблон «Признаки: …»).
+  Название и описание засчитываются, только если в них хотя бы `ECHO_MIN_NEW_WORDS` новых слов —
+  не из черновика и не из адреса; остальные поля, совпавшие с черновиком, просто не применяются;
+- без спойлеров — только для скрытых осложнений (zone, duplicate, refusal): регулярные выражения
+  по началу слова, чтобы «не нашли» не считалось «не наш».
 """
 
 from __future__ import annotations
 
 import copy
+import logging
 import re
 from typing import Any
 
 from ..ports import LLMProvider
 from .llm import ask_json
 from .rules import match_groups
+
+log = logging.getLogger(__name__)
 
 COMPOSE_SCHEMA = {
     "type": "object",
@@ -40,21 +52,27 @@ COMPLICATION_HINTS = {
 }
 DEFAULT_HINT = "обычное происшествие в зоне ответственности службы"
 # особенность выясняет обучающийся; название и описание (их видно в списке занятий)
-# выдавать её не должны
+# выдавать её не должны. Каждое выражение привязано к началу слова (см. `_spoils`).
 SPOILERS = (
-    "ддс",
-    "реагир",
-    "не должн",
-    "дубл",
-    "организац",
-    "чуж",
-    "проводить не будут",
-    "зарегистрирован",
-    "не наш",
-    "отказ от",
-    "откаж",
-    "отказыва",
+    r"ддс",
+    r"реагир",
+    r"не должн",
+    r"дубл",
+    r"организац",
+    r"чуж",
+    r"проводить не будут",
+    r"зарегистрирован",
+    r"не наш(?!л)",
+    r"отказ от",
+    r"откаж",
+    r"отказыва",
 )
+_SPOILER_RE = re.compile(r"(?<![а-яa-z0-9])(?:" + "|".join(SPOILERS) + ")")
+HIDDEN_COMPLICATIONS = frozenset({"zone", "duplicate", "refusal"})
+
+# сколько слов, которых нет ни в черновике, ни в адресе, нужно, чтобы текст не считался повтором
+ECHO_MIN_NEW_WORDS = 2
+_ADDRESS_WORDS = frozenset({"улица", "ул", "дом", "корп", "корпус", "подъезд", "кв"})
 
 DIFFICULTY_HINTS = {
     1: "заявитель спокоен и говорит чётко",
@@ -77,7 +95,6 @@ def _prompt(scenario: dict[str, Any], complication: str, difficulty: int) -> str
     inc = scenario.get("incident", {})
     exp = scenario.get("expected", {})
     typ = inc.get("type", {}) or {}
-    descriptions = inc.get("descriptions") or [{}]
     inputs = scenario.get("inputs") or []
     applicant = inc.get("applicant", {}) or {}
     samples = exp.get("sample") or {}
@@ -95,9 +112,8 @@ def _prompt(scenario: dict[str, Any], complication: str, difficulty: int) -> str
         f"Верные действия диспетчера: статусы {' → '.join(exp.get('path') or [])}",
         f"Эталонные комментарии: {'; '.join(f'{k}: {v}' for k, v in samples.items())}",
         "",
-        "Черновик (перепиши живее и конкретнее, факты не меняй):",
-        f"title: {scenario.get('title', '')}",
-        f"description: {descriptions[0].get('text', '')}",
+        # черновые title и description не показываем: модель их повторяет слово в слово
+        "Черновик реплик (перепиши живее, факты и названия организаций не меняй):",
         f"chief_reply: {scenario.get('chiefReply', '')}",
         f"sample_report: {exp.get('sampleReport', '')}",
         "inputs: " + " | ".join(i.get("text", "") for i in inputs),
@@ -106,7 +122,9 @@ def _prompt(scenario: dict[str, Any], complication: str, difficulty: int) -> str
         "title — короткое название сценария, до 90 знаков;",
         "description — описание происшествия, как его записал оператор 112 со слов заявителя: "
         "2–4 предложения, конкретные детали (этаж, что видно, есть ли пострадавшие); "
-        "адрес не повторяй;",
+        "адрес не повторяй; не пиши «Признаки:» и не перечисляй признаки списком. Пример: "
+        "«Звонит соседка: в лифте третьего подъезда застрял мужчина, кабина стоит между 5 и 6 "
+        "этажами, свет есть, отвечает через дверь. Пострадавших нет.»;",
         "chief_reply — ответ руководителя диспетчеру по телефону, разговорный, 1–3 предложения, "
         "сохрани названия организаций из черновика, закончи «Конец связи.»;",
         "sample_report — эталонный доклад диспетчера руководителю: начни «Докладываю:», назови "
@@ -123,14 +141,50 @@ def _text(value: Any, lo: int, hi: int) -> str | None:
     return s if lo <= len(s) <= hi else None
 
 
-def _letters(text: str) -> str:
-    # «Д.Д.С.», «д-д-с» и «не  наш» сводим к буквам, чтобы их не пропустить
-    return re.sub(r"[^а-яёa-z]+", "", text.lower())
+def _words(text: str) -> list[str]:
+    # «Д.Д.С.» и «д-д-с» склеиваем обратно в «ддс»: цепочка однобуквенных слов — одно слово
+    out: list[str] = []
+    run = ""
+    for w in re.findall(r"[а-яa-z0-9]+", text.lower().replace("ё", "е")):
+        if len(w) == 1 and w.isalpha():
+            run += w
+            continue
+        if run:
+            out.append(run)
+            run = ""
+        out.append(w)
+    if run:
+        out.append(run)
+    return out
 
 
 def _spoils(text: str) -> bool:
-    low = _letters(text)
-    return any(_letters(s) in low for s in SPOILERS)
+    return _SPOILER_RE.search(" ".join(_words(text))) is not None
+
+
+def _same_root(a: str, b: str) -> bool:
+    n = min(5, len(a), len(b))
+    return a[:n] == b[:n]
+
+
+def _new_words(text: str, *known: str) -> int:
+    seen = [w for k in known for w in _words(k)]
+    return sum(
+        1
+        for w in _words(text)
+        if len(w) >= 3
+        and not w.isdigit()
+        and w not in _ADDRESS_WORDS
+        and not any(_same_root(w, k) for k in seen)
+    )
+
+
+def _echoes(text: str, draft_text: str, address: str) -> bool:
+    return _new_words(text, draft_text, address) < ECHO_MIN_NEW_WORDS
+
+
+def _same(text: str, draft_text: Any) -> bool:
+    return _words(text) == _words(str(draft_text or ""))
 
 
 def _check_shape(draft: dict[str, Any]) -> None:
@@ -169,18 +223,36 @@ def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str,
     applied: list[str] = []
     rejected: list[str] = []
     if out is not None:
-        title = _text(out.get("title"), 8, 120)
-        if title is not None and not _spoils(title):
-            scenario["title"] = title
-            applied.append("title")
-        elif out.get("title"):
-            rejected.append("title")
-        desc = _text(out.get("description"), 30, 700)
-        if desc is not None and not _spoils(desc):
-            scenario["incident"]["descriptions"][0]["text"] = desc
-            applied.append("description")
-        elif out.get("description"):
-            rejected.append("description")
+        hidden = complication in HIDDEN_COMPLICATIONS
+        address = _address(draft)
+
+        def reject(field: str, reason: str) -> None:
+            rejected.append(field)
+            log.info("compose: поле %s не применено — %s", field, reason)
+
+        def check_free_text(field: str, value: Any, draft_text: str, lo: int, hi: int):
+            text = _text(value, lo, hi)
+            if text is None:
+                reject(field, f"длина вне {lo}–{hi} знаков")
+            elif _echoes(text, draft_text, address):
+                reject(field, "повтор шаблона")
+            elif hidden and _spoils(text):
+                reject(field, "выдаёт скрытое осложнение")
+            else:
+                return text
+            return None
+
+        if out.get("title"):
+            title = check_free_text("title", out["title"], str(draft.get("title") or ""), 8, 120)
+            if title is not None:
+                scenario["title"] = title
+                applied.append("title")
+        if out.get("description"):
+            draft_desc = str(draft["incident"]["descriptions"][0].get("text") or "")
+            desc = check_free_text("description", out["description"], draft_desc, 30, 700)
+            if desc is not None:
+                scenario["incident"]["descriptions"][0]["text"] = desc
+                applied.append("description")
 
         # ответ руководителя должен сохранить организацию, куда передаётся информация
         chief = _text(out.get("chief_reply"), 10, 400)
@@ -189,23 +261,30 @@ def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str,
             if complication in {"zone", "refusal"}
             else []
         )
-        if chief and (not org or not match_groups(chief, [org])[1]):
+        if chief and _same(chief, draft.get("chiefReply")):
+            log.info("compose: поле chiefReply не применено — совпадает с черновиком")
+        elif chief and (not org or not match_groups(chief, [org])[1]):
             scenario["chiefReply"] = chief
             applied.append("chiefReply")
         elif out.get("chief_reply"):
-            rejected.append("chiefReply")
+            reject("chiefReply", "нет организации из эталона или длина")
 
         # эталонный доклад должен проходить ту же проверку, что и доклад обучающегося
         report = _text(out.get("sample_report"), 15, 400)
-        if report and not match_groups(report, exp.get("reportMustMention") or [])[1]:
+        if report and _same(report, (draft.get("expected") or {}).get("sampleReport")):
+            log.info("compose: поле sampleReport не применено — совпадает с черновиком")
+        elif report and not match_groups(report, exp.get("reportMustMention") or [])[1]:
             exp["sampleReport"] = report
             applied.append("sampleReport")
         elif out.get("sample_report"):
-            rejected.append("sampleReport")
+            reject("sampleReport", "не проходит проверку доклада или длина")
 
         inputs = scenario.get("inputs") or []
         texts = [_text(t, 3, 300) for t in out.get("inputs") or []]
-        if inputs and len(texts) == len(inputs) and all(texts):
+        same = all(
+            t is not None and _same(t, i.get("text")) for t, i in zip(texts, inputs, strict=False)
+        )
+        if inputs and len(texts) == len(inputs) and all(texts) and not same:
             for item, text in zip(inputs, texts, strict=True):
                 item["text"] = text
             applied.append("inputs")
