@@ -1,5 +1,6 @@
 package com.fluffb4ll.lct112HttpBackend.entity;
 
+import com.fluffb4ll.lct112HttpBackend.model.enums.AiEvaluationStatus;
 import com.fluffb4ll.lct112HttpBackend.util.IdGeneratorUtil;
 import jakarta.persistence.*;
 import lombok.*;
@@ -40,6 +41,11 @@ public class EvaluationEntity {
 
     @Column(name = "ai_recommendations", columnDefinition = "text")
     private String aiRecommendations;
+
+    /** Состояние последнего запуска оценки ИИ; null — оценку ИИ ещё не запрашивали (или строка старше колонки) */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "ai_status", length = 20)
+    private AiEvaluationStatus aiStatus;
 
     @Column(name = "teacher_score")
     private Integer teacherScore;

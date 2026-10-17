@@ -1,5 +1,6 @@
 package com.fluffb4ll.lct112HttpBackend.controller;
 
+import com.fluffb4ll.lct112HttpBackend.dto.request.ChangeScenarioStatusRequestDto;
 import com.fluffb4ll.lct112HttpBackend.dto.request.CreateScenarioRequestDto;
 import com.fluffb4ll.lct112HttpBackend.dto.request.UpdateScenarioRequestDto;
 import com.fluffb4ll.lct112HttpBackend.dto.response.CreateScenarioResponseDto;
@@ -53,6 +54,16 @@ public class ScenarioController {
             @PathVariable("uuid") UUID scenarioId
     ) throws AuthenticationException {
         scenarioService.approveScenario(UUID.fromString(token), scenarioId);
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/{uuid}/status")
+    public ResponseEntity<Void> changeScenarioStatus(
+            @CookieValue(name = "AUTH_TOKEN") String token,
+            @PathVariable("uuid") UUID scenarioId,
+            @RequestBody ChangeScenarioStatusRequestDto request
+    ) throws AuthenticationException {
+        scenarioService.changeScenarioStatus(UUID.fromString(token), scenarioId, request.status());
         return ResponseEntity.ok().build();
     }
 

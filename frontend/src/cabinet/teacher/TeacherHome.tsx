@@ -32,7 +32,7 @@ export function TeacherHome({ section = 'bank', param }: { section?: string; par
   ];
   const s = ['bank', 'sessions', 'groups', 'monitor', 'reports'].includes(section) ? section : 'bank';
 
-  if (s === 'bank' && param) return <ScenarioEditor id={param} nav={nav} />;
+  if (s === 'bank' && param) return <ScenarioEditor key={param} id={param} nav={nav} />;
 
   const titles: Record<string, string> = {
     bank: 'Банк сценариев',
