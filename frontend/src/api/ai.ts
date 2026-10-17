@@ -69,6 +69,9 @@ let voiceCaps: Promise<{ stt: boolean; tts: boolean }> | null = null;
 export function voiceCapabilities(): Promise<{ stt: boolean; tts: boolean }> {
   voiceCaps ??= aiFetch('/v1/voice', { timeoutMs: 4000 })
     .then((r) => r.json() as Promise<{ stt: boolean; tts: boolean }>)
-    .catch(() => ({ stt: false, tts: false }));
+    .catch(() => {
+      voiceCaps = null; // контур мог ещё подниматься — спросим снова при следующем звонке
+      return { stt: false, tts: false };
+    });
   return voiceCaps;
 }

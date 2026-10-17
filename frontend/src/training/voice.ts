@@ -24,20 +24,29 @@ export function ttsAvailable(): boolean {
 }
 
 let playing: { audio: HTMLAudioElement; done: () => void } | null = null;
+// растёт при каждом stopSpeaking: реплика, синтез которой ещё шёл, после сброса не звучит
+let speechGen = 0;
 
 /** Синтез на сервере; false — сервер не смог, нужен откат на браузер */
-async function speakServer(text: string, gender: 'male' | 'female'): Promise<boolean> {
+async function speakServer(text: string, gender: 'male' | 'female', gen: number): Promise<boolean> {
   if (!(await voiceCapabilities()).tts) return false;
   let url = '';
   try {
-    url = URL.createObjectURL(await synthesize(text, gender));
+    const wav = await synthesize(text, gender);
+    if (gen !== speechGen) return true;
+    url = URL.createObjectURL(wav);
     const audio = new Audio(url);
     await new Promise<void>((resolve, reject) => {
       const done = () => {
         if (playing?.audio === audio) playing = null;
         resolve();
       };
-      stopSpeaking();
+      // прервать предыдущую реплику, не отменяя эту
+      if (playing) {
+        playing.audio.pause();
+        playing.done();
+      }
+      if (ttsAvailable()) window.speechSynthesis.cancel();
       playing = { audio, done };
       audio.onended = done;
       audio.onerror = () => reject(new Error('audio'));
@@ -53,7 +62,9 @@ async function speakServer(text: string, gender: 'male' | 'female'): Promise<boo
 }
 
 export async function speak(text: string, gender: 'male' | 'female'): Promise<void> {
-  if (await speakServer(text, gender)) return;
+  const gen = speechGen;
+  if (await speakServer(text, gender, gen)) return;
+  if (gen !== speechGen) return;
   return speakBrowser(text, gender);
 }
 
@@ -96,6 +107,7 @@ function speakBrowser(text: string, gender: 'male' | 'female'): Promise<void> {
 }
 
 export function stopSpeaking() {
+  speechGen++;
   if (playing) {
     const { audio, done } = playing;
     playing = null;
@@ -203,24 +215,34 @@ export interface Recording {
 }
 
 export async function recordMic(): Promise<Recording | null> {
+  let stream: MediaStream | null = null;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const tracks = stream.getTracks();
     const chunks: Blob[] = [];
     const rec = new MediaRecorder(stream);
     const started = performance.now();
     rec.ondataavailable = (e) => chunks.push(e.data);
     rec.start();
+    let stopping: Promise<{ durationMs: number; blob: Blob | null }> | null = null;
+    const result = () => {
+      tracks.forEach((t) => t.stop());
+      return { durationMs: performance.now() - started, blob: chunks.length ? new Blob(chunks, { type: rec.mimeType }) : null };
+    };
     return {
+      // повторный вызов отдаёт тот же результат; запись, уже остановленная браузером, — сразу
       stop: () =>
-        new Promise((resolve) => {
-          rec.onstop = () => {
-            stream.getTracks().forEach((t) => t.stop());
-            resolve({ durationMs: performance.now() - started, blob: chunks.length ? new Blob(chunks, { type: rec.mimeType }) : null });
-          };
+        (stopping ??= new Promise((resolve) => {
+          if (rec.state === 'inactive') {
+            resolve(result());
+            return;
+          }
+          rec.onstop = () => resolve(result());
           rec.stop();
-        }),
+        })),
     };
   } catch {
+    stream?.getTracks().forEach((t) => t.stop()); // микрофон не держим, если запись не началась
     return null;
   }
 }

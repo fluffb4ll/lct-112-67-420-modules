@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PageResponse } from '../../api/admin';
 import { mutate } from '../../api/db';
 import { composeScenario } from '../../api/ai';
@@ -234,6 +234,14 @@ function GenerateModal({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [progress, setProgress] = useState('');
+  // окно закрыли посреди генерации — оставшиеся сценарии не пишем и не сохраняем
+  const closed = useRef(false);
+  useEffect(
+    () => () => {
+      closed.current = true;
+    },
+    [],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -261,6 +269,7 @@ function GenerateModal({
     let failed = 0;
     let byTemplate = 0;
     for (const [i, draft] of list.entries()) {
+      if (closed.current) break;
       setProgress(`ИИ пишет сценарий ${i + 1} из ${list.length}…`);
       // текст пишет языковая модель ИИ-контура; контур недоступен — остаётся текст шаблона
       const comp = (comps.length ? comps : (['none'] as Complication[]))[i % Math.max(comps.length, 1)];
@@ -274,6 +283,7 @@ function GenerateModal({
           return draft;
         },
       );
+      if (closed.current) break;
       try {
         const { scenarioId } = await createScenarioOnServer(toBody(sc, chosen));
         // зеркалим в локальные данные: занятия и тренажёр пока работают на них
@@ -284,8 +294,10 @@ function GenerateModal({
         setErr(describeError(e, 'Не удалось сохранить сценарий'));
       }
     }
-    setBusy(false);
-    setProgress('');
+    if (!closed.current) {
+      setBusy(false);
+      setProgress('');
+    }
     if (saved) onDone(saved, failed, byTemplate);
   };
 

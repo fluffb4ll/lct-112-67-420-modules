@@ -100,7 +100,8 @@ public class EvaluationService {
 
     @Transactional
     public EvaluationDto evaluateWithAi(UUID token, UUID cardId) throws AuthenticationException {
-        authService.verifyAuthToken(token, null);
+        UserEntity currentUser = authService.verifyAuthToken(token, null);
+        verifyTeacherOrAdmin(currentUser);
 
         OperatorCardEntity card = operatorCardRepository.findById(cardId)
                 .orElseThrow(() -> new OperatorCardException("Operator card not found"));

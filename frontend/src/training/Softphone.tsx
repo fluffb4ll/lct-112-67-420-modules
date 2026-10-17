@@ -33,6 +33,9 @@ export function Softphone() {
   const recording = useRef<Recording | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const alive = useRef(true);
+  // номер звонка: после await проверяем, что звонок тот же (не сброшен и не набран новый)
+  const callSeq = useRef(0);
+  const finishing = useRef(false);
 
   useEffect(() => {
     alive.current = true;
@@ -56,6 +59,8 @@ export function Softphone() {
 
   async function call(number: string) {
     const peer = resolvePeer(number, contacts);
+    const seq = ++callSeq.current;
+    const live = () => alive.current && callSeq.current === seq;
     sp.patch({ phase: 'ringing', number, peer, lines: [], connectedAt: null });
     setHeard('');
     setTyped('');
@@ -75,11 +80,16 @@ export function Softphone() {
     ringback(2);
     timers.current.push(
       setTimeout(async () => {
-        if (!alive.current || useSoftphone.getState().phase !== 'ringing') return;
+        if (!live() || useSoftphone.getState().phase !== 'ringing') return;
         sp.patch({ phase: 'connected', connectedAt: Date.now(), lines: [{ who: 'peer', text: peer.greeting }] });
         await speak(peer.greeting, peer.voice);
-        if (!alive.current || useSoftphone.getState().phase !== 'connected') return;
-        recording.current = await recordMic();
+        if (!live() || useSoftphone.getState().phase !== 'connected') return;
+        const rec = await recordMic();
+        if (!live() || useSoftphone.getState().phase !== 'connected') {
+          void rec?.stop(); // сброшен, пока спрашивали доступ к микрофону
+          return;
+        }
+        recording.current = rec;
         if (!recording.current && serverStt.current) setTextMode(true); // нет доступа к микрофону
         else if (!textMode && !serverStt.current) {
           listener.current = listen(
@@ -93,7 +103,19 @@ export function Softphone() {
 
   async function finishReport() {
     const st = useSoftphone.getState();
-    if (st.phase !== 'connected' || !st.peer || recognizing) return;
+    if (st.phase !== 'connected' || !st.peer || finishing.current) return;
+    finishing.current = true;
+    try {
+      await sendReport(st);
+    } finally {
+      finishing.current = false;
+    }
+  }
+
+  async function sendReport(st: ReturnType<typeof useSoftphone.getState>) {
+    if (!st.peer) return;
+    const seq = callSeq.current;
+    const live = () => alive.current && callSeq.current === seq;
     listener.current?.stop();
     listener.current = null;
     const rec = await recording.current?.stop();
@@ -103,8 +125,8 @@ export function Softphone() {
       setRecognizing(true);
       const a = run.current?.scenario.incident.address;
       const text = await recognize(rec.blob, a ? [a.street, a.house].filter(Boolean) : []);
-      if (!alive.current) return;
-      setRecognizing(false);
+      if (alive.current) setRecognizing(false);
+      if (!live()) return; // звонок сброшен, пока распознавали
       if (!text) {
         // распознать не вышло — доклад вводится текстом, звонок продолжается
         setSttNote(text === null ? 'Сервер распознавания не ответил' : 'Речь не распознана');
@@ -119,7 +141,7 @@ export function Softphone() {
       lines: [...st.lines, { who: 'me', text: transcript || '(тишина)' }, { who: 'peer', text: reply }],
     });
     await speak(reply, st.peer.voice);
-    if (!alive.current) return;
+    if (!live()) return;
     sp.patch({ phase: 'ended' });
     run.callEnded(st.peer.contactId, transcript, { from: st.peer.title, text: reply });
     busy();
@@ -128,6 +150,8 @@ export function Softphone() {
 
   function hangup() {
     const st = useSoftphone.getState();
+    callSeq.current++;
+    setRecognizing(false);
     timers.current.forEach(clearTimeout);
     timers.current = [];
     listener.current?.stop();
