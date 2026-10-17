@@ -76,8 +76,13 @@ def test_hash_checked_once_and_mismatch_deleted(tmp_path):
     assert llm.read_bytes() == LLM  # скачан заново
     assert llm.with_name("model.gguf.bad").read_bytes() == b"broken"  # лежавший файл не стёрт
 
-    fourth = fetch(tmp_path)  # модель на месте проверена — отложенный .bad больше не нужен
-    assert "удаляю" in fourth and not llm.with_name("model.gguf.bad").exists()
+    bad = llm.with_name("model.gguf.bad")
+    fourth = fetch(tmp_path)  # .bad мог быть своей моделью: живёт неделю, лог напоминает
+    assert f"лежит {bad}" in fourth and bad.read_bytes() == b"broken"
+    old = time.time() - 8 * 86400
+    os.utime(bad, (old, old))
+    fifth = fetch(tmp_path)
+    assert f"удаляю {bad}" in fifth and not bad.exists()
     assert llm.read_bytes() == LLM
 
 
@@ -116,8 +121,17 @@ def test_own_model_is_never_destroyed(tmp_path):
     default = out / "llm" / "model.gguf"
     default.parent.mkdir(parents=True)
     default.write_bytes(b"my-model")
-    fetch(tmp_path, DDS_LLM_MODEL_URL=None, DDS_LLM_MODEL_SHA256=None, DDS_LLM_MODEL_PATH=None)
-    assert default.with_name("model.gguf.bad").read_bytes() == b"my-model"
+    old = time.time() - 30 * 86400  # модель старая, но срок .bad — от отложения
+    os.utime(default, (old, old))
+    defaults = {"DDS_LLM_MODEL_URL": None, "DDS_LLM_MODEL_SHA256": None, "DDS_LLM_MODEL_PATH": None}
+    fetch(tmp_path, **defaults)
+    bad = default.with_name("model.gguf.bad")
+    assert bad.read_bytes() == b"my-model"
+    # следующие запуски (в том числе без проверки хеша) свою модель не удаляют
+    log = fetch(tmp_path, **defaults)
+    assert f"лежит {bad}" in log and bad.read_bytes() == b"my-model"
+    fetch(tmp_path, DDS_FETCH_VERIFY="0", **defaults)
+    assert bad.read_bytes() == b"my-model"
 
 
 # curl: на докачку (-C -) уже целого или чужого .part сервер отвечает 416, curl выходит с 0
