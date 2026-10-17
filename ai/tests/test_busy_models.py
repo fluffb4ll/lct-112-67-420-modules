@@ -117,7 +117,7 @@ class LateLock:
 def test_llamacpp_lock_got_after_deadline_does_not_start_generation(llama, gguf):  # noqa: F811
     p = LlamaCppProvider(gguf, lock_timeout_s=30, timeout_s=0.05)
     p._lock = LateLock()
-    with pytest.raises(LLMBusy):
+    with pytest.raises(TimeoutError):
         p.complete("промпт", max_tokens=8)
     assert FakeLlama.instances[0].calls == [] and not p._lock.held
 
