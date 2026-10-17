@@ -12,17 +12,21 @@ export function normalize(text: string): string {
     .trim();
 }
 
-// Звуки, которые распознавание речи путает: звонкие и глухие, безударные гласные.
-// Алгоритм один в один с ai/src/dds_ai/bridge/rules.py — оценки фронта и сервера совпадают.
-const FOLD: Record<string, string> = { з: 'с', д: 'т', б: 'п', г: 'к', в: 'ф', ж: 'ш', о: 'а', е: 'и', я: 'и' };
+// Звуки, которые распознавание речи путает в докладах (замерено на faster-whisper small):
+// з/с в начале слова («состревание») и безударные гласные о/а, е/и, я/и («застриване», «застрял»).
+// Другие пары звонких и глухих склеивают разные слова («коричневая» → «горяч», «отрезали» → «адрес»).
+// Алгоритм один в один с ai/src/dds_ai/bridge/rules.py (докстринг match_groups) — оценки фронта и сервера совпадают.
+const FOLD: Record<string, string> = { з: 'с', о: 'а', е: 'и', я: 'и' };
 const FUZZY_MIN_STEM = 5;
+// с какой длины корня прощается одна правка (вставка, пропуск, замена) после свёртки
+const FUZZY_EDIT_MIN_STEM = 8;
 // Короткие корни, которые STT стабильно слышит как другое слово (замерено на faster-whisper
-// small: «в лифте» → «в листе»). Корень засчитан, если слово — замена плюс падежное окончание
-// из SOUNDALIKE_ENDINGS: «листе» — да, «листовка», «листок», «листья» — нет.
+// small: «в лифте» → «в листе»). Засчитывается только замена с окончанием из
+// SOUNDALIKE_ENDINGS — предложный падеж «в/на листе»: голое «лист», «листа», «листок» — бумага.
 const STT_SOUNDALIKES: Record<string, string[]> = { лифт: ['лист'] };
-const SOUNDALIKE_ENDINGS = new Set(['', 'а', 'у', 'ом', 'е', 'ы', 'ов', 'ах', 'ам', 'ами']);
+const SOUNDALIKE_ENDINGS = new Set(['е']);
 
-const fold = (s: string) => s.replace(/[здбгвжоея]/g, (c) => FOLD[c]);
+const fold = (s: string) => s.replace(/[зоея]/g, (c) => FOLD[c]);
 
 function levenshtein(a: string, b: string): number {
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -36,8 +40,8 @@ function levenshtein(a: string, b: string): number {
 
 /**
  * Корень узнан в слове с ошибкой распознавания. Сначала созвучия из STT_SOUNDALIKES («листе» — «лифт»),
- * затем префикс слова (длиной корня ±1 буква) после свёртки похожих звуков сравнивается с корнем:
- * корни из 5–6 букв должны совпасть точно, длинные — с одной правкой. Короткие корни и числа («19») —
+ * затем префикс слова (длиной корня ±1 буква) после свёртки сравнивается с корнем: первая и последняя
+ * буквы совпадают, правок нет (корни до 7 букв) или одна (от 8). Короткие корни и числа («19») —
  * только точно и через созвучия.
  */
 function fuzzyHit(words: string[], stem: string): boolean {
@@ -45,12 +49,14 @@ function fuzzyHit(words: string[], stem: string): boolean {
     if (words.some((w) => w.startsWith(alt) && SOUNDALIKE_ENDINGS.has(w.slice(alt.length)))) return true;
   const n = stem.length;
   if (n < FUZZY_MIN_STEM || !/^\p{L}+$/u.test(stem)) return false;
-  const budget = n <= 6 ? 0 : 1;
+  const budget = n >= FUZZY_EDIT_MIN_STEM ? 1 : 0;
   const target = fold(stem);
-  for (const w of words) {
-    if (w.length < n - 1) continue;
-    for (const k of [n - 1, n, n + 1]) if (k <= w.length && levenshtein(fold(w.slice(0, k)), target) <= budget) return true;
-  }
+  for (const w of words)
+    for (const k of [n - 1, n, n + 1]) {
+      if (k > w.length) continue;
+      const p = fold(w.slice(0, k));
+      if (p[0] === target[0] && p[p.length - 1] === target[target.length - 1] && levenshtein(p, target) <= budget) return true;
+    }
   return false;
 }
 
