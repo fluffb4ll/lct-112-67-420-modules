@@ -9,6 +9,7 @@ import { attemptVerdict } from '../../training/serverScore';
 import { useServerScore } from '../../training/useServerScore';
 import { Badge, Button, Input, Modal, Notice, Textarea } from '../../ui';
 import { cx } from '../../ui/cx';
+import { WITHDRAWN_LABEL } from './withdrawn';
 
 /*
  * Подробности попытки: проверки, лента действий, экспертная оценка преподавателя.
@@ -43,7 +44,7 @@ export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attemp
 
   return (
     <Modal
-      title={sc?.title ?? 'Попытка'}
+      title={sc?.title ?? `Попытка: ${WITHDRAWN_LABEL}`}
       onClose={onClose}
       width={820}
       footer={<Button onClick={onClose}>Закрыть</Button>}
@@ -62,6 +63,11 @@ export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attemp
           </span>
         )}
       </div>
+      {!sc && (
+        <div className="mt-2">
+          <Notice tone="neutral">Сценарий снят с занятий — условия карточки больше недоступны, результаты попытки сохранены.</Notice>
+        </div>
+      )}
 
       {ev && (
         <table className="mt-3 w-full text-sm">

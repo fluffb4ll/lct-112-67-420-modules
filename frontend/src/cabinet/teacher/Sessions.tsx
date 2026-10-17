@@ -19,6 +19,7 @@ import {
 import { listStudyGroups, type StudyGroupRow } from '../../api/teacher';
 import { dateTime } from '../../domain/format';
 import { useMe } from '../../store/session';
+import { pollUntil } from '../../training/pollUntil';
 import { Badge, Button, Checkbox, ConfirmModal, Empty, Input, Modal, Notice, Panel, Select, Table, Textarea } from '../../ui';
 
 /*
@@ -369,6 +370,9 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [aiSlow, setAiSlow] = useState(false);
+  // каждый запрос оценки ИИ запускает опрос заново — даже если статус и так был PENDING
+  const [aiRound, setAiRound] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -385,6 +389,19 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
       alive = false;
     };
   }, [card.id]);
+
+  // пока ИИ оценивает — перечитываем оценку с затуханием (pollUntil). Трогаем только её:
+  // оценку и комментарий, которые преподаватель уже вводит, опрос не затирает
+  const pending = evaluation?.aiStatus === 'PENDING';
+  useEffect(() => {
+    if (!pending) return;
+    return pollUntil({
+      load: () => getEvaluation(card.id),
+      isDone: (e) => e.aiStatus !== 'PENDING',
+      onValue: setEvaluation,
+      onGiveUp: () => setAiSlow(true),
+    });
+  }, [card.id, pending, aiRound]);
 
   const save = async () => {
     const n = Number(score);
@@ -406,6 +423,8 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
     setErr('');
     try {
       setEvaluation(await requestAiEvaluation(card.id));
+      setAiSlow(false);
+      setAiRound((n) => n + 1);
     } catch (e) {
       // 503 — ИИ-контур недоступен: показываем текст сервера и перечитываем статус оценки
       if (e instanceof ApiError && e.status === 503) {
@@ -446,7 +465,9 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
             {evaluation.aiStatus === 'UNAVAILABLE' && (
               <Notice tone="warn">ИИ-контур недоступен — оценки ИИ нет. Запросите заново позже или выставьте свою.</Notice>
             )}
-            {evaluation.aiStatus === 'PENDING' && <Notice tone="neutral">ИИ оценивает карточку…</Notice>}
+            {evaluation.aiStatus === 'PENDING' && (
+              <Notice tone="neutral">{aiSlow ? 'Оценка ИИ ещё не готова — запросите позже или выставьте свою.' : 'ИИ оценивает карточку…'}</Notice>
+            )}
             <div>
               <b>Оценка ИИ:</b> {evaluation.aiScore ?? '—'}
               {evaluation.finalScore != null && <span className="text-c-muted"> · итог {evaluation.finalScore}</span>}

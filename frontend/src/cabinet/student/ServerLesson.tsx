@@ -5,6 +5,7 @@ import { incomingCards, listSessions, type IncomingCard, type IncomingCardsStrea
 import { navigate } from '../../app/router';
 import type { User } from '../../domain/types';
 import { setLessonScenario } from '../../store/serverScenarios';
+import { takeCardError } from '../shared/withdrawn';
 import { useRun } from '../../store/training';
 import { Badge, Button, Notice, Panel, Table } from '../../ui';
 
@@ -80,7 +81,9 @@ export function ServerLesson({ user, groupId }: { user: User; groupId: string | 
       });
       navigate('/arm');
     } catch (e) {
-      setErr(describeError(e, 'Не удалось открыть карточку'));
+      setErr(takeCardError(e));
+      // сценарий могли снять с занятий — при следующем опросе бэкенд уберёт карточку из потока
+      void tick();
     } finally {
       setBusy(false);
     }
