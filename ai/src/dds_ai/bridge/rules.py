@@ -79,10 +79,10 @@ def normalize(text: str) -> str:
 _FOLD = str.maketrans("здбгвжоея", "стпкфшаии")
 FUZZY_MIN_STEM = 5
 # Короткие корни, которые STT стабильно слышит как другое слово (замерено на faster-whisper
-# small: «в лифте» → «в листе»). Корень засчитан, если слово начинается с такой замены и
-# длиннее её не больше чем на SOUNDALIKE_MAX_TAIL букв (окончание): «листе» — да, «листовка» — нет.
+# small: «в лифте» → «в листе»). Корень засчитан, если слово — замена плюс падежное окончание
+# из SOUNDALIKE_ENDINGS: «листе» — да, «листовка», «листок», «листья» — нет.
 STT_SOUNDALIKES: dict[str, tuple[str, ...]] = {"лифт": ("лист",)}
-SOUNDALIKE_MAX_TAIL = 3
+SOUNDALIKE_ENDINGS = frozenset({"", "а", "у", "ом", "е", "ы", "ов", "ах", "ам", "ами"})
 
 
 def _levenshtein(a: str, b: str) -> int:
@@ -98,7 +98,7 @@ def _levenshtein(a: str, b: str) -> int:
 def _fuzzy_hit(words: list[str], stem: str) -> bool:
     """Корень узнан в слове с ошибкой распознавания (шаги 3–4 из `match_groups`)."""
     for alt in STT_SOUNDALIKES.get(stem, ()):
-        if any(w.startswith(alt) and len(w) - len(alt) <= SOUNDALIKE_MAX_TAIL for w in words):
+        if any(w.startswith(alt) and w[len(alt) :] in SOUNDALIKE_ENDINGS for w in words):
             return True
     n = len(stem)
     if n < FUZZY_MIN_STEM or not stem.isalpha():
@@ -126,9 +126,9 @@ def match_groups(
     1. Нормализация текста и корня: нижний регистр, «ё» → «е», всё, кроме букв и цифр, —
        пробел; слова — части по пробелу.
     2. Точно: корень — подстрока нормализованного текста.
-    3. Созвучия (только fuzzy): корень есть в `STT_SOUNDALIKES` и какое-то слово начинается
-       с его замены, а хвост слова после неё — не длиннее 3 букв («лифт»: «листе» — да,
-       «листовка» — нет).
+    3. Созвучия (только fuzzy): корень есть в `STT_SOUNDALIKES` и какое-то слово — его замена
+       плюс окончание из `SOUNDALIKE_ENDINGS` («», а, у, ом, е, ы, ов, ах, ам, ами): «лифт» —
+       «лист», «листе» да; «листовка», «листок», «листья», «листать» нет.
     4. Свёртка (только fuzzy, корни из ≥5 букв и только из букв): в корне и в словах
        з→с, д→т, б→п, г→к, в→ф, ж→ш, о→а, е→и, я→и. Для каждого слова берутся префиксы
        длиной L−1, L, L+1 (L — длина корня, префикс не длиннее слова; слова короче L−1

@@ -89,3 +89,14 @@ def test_steering_note_addresses_trainee_as_vy():
     out = recs(verdict("Вы молодец."), comment=steer)
     assert "обучающ" not in out.lower()
     assert "В вашем тексте есть обращение к проверке" in out
+
+
+def test_address_abbreviations_and_quotes_are_not_cut():
+    out = recs(
+        verdict(
+            "Вы верно выбрали статус.",
+            ['Укажите адрес: ул. Кировоградская, д. 15.', 'Назовите "Домовой" в комментарии.'],
+        )
+    )
+    assert "— Укажите адрес: ул. Кировоградская, д. 15." in out
+    assert '— Назовите "Домовой" в комментарии.' in out

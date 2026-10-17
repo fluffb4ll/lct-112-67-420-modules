@@ -89,7 +89,7 @@ def _ru_words(text: str) -> list[str]:
 
 
 def _junk(sentence: str) -> bool:
-    if re.search(r"[A-Za-z{}\[\]<>\"_]", sentence):
+    if re.search(r"[A-Za-z{}\[\]<>_]", sentence):
         return True
     low = sentence.lower()
     if any(r in low for r in FEEDBACK_JUNK_ROOTS):
@@ -100,13 +100,27 @@ def _junk(sentence: str) -> bool:
     return max(Counter(w for w in words if len(w) >= 3).values(), default=0) >= 3
 
 
+# точка после сокращения в адресе — не конец предложения: «ул. Кировоградская, д. 15.»
+_ABBREV_END = re.compile(r"(?<![а-яё])(?:ул|д|кв|корп|стр|пр|пер|эт|г|мкр)\.$", re.IGNORECASE)
+
+
+def _sentences(text: str) -> list[str]:
+    out: list[str] = []
+    for piece in re.split(r"(?<=[.!?…])\s+", text):
+        if out and _ABBREV_END.search(out[-1]):
+            out[-1] += " " + piece
+        else:
+            out.append(piece)
+    return out
+
+
 def _clean_feedback(summary: Any, remarks: Any) -> tuple[str, list[str]]:
     """Разбор модели без мусора: (итог, замечания). Пустые — если ничего годного не осталось."""
     seen: set[tuple[str, ...]] = set()
 
     def keep(text: Any) -> list[str]:
         out = []
-        for sentence in re.split(r"(?<=[.!?…])\s+", " ".join(str(text or "").split())):
+        for sentence in _sentences(" ".join(str(text or "").split())):
             key = tuple(_ru_words(sentence))
             if not sentence or _junk(sentence) or key in seen:
                 continue
