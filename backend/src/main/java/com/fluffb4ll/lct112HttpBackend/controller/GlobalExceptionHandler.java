@@ -54,6 +54,12 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(400).body(response);
     }
 
+    @ExceptionHandler(AiEvaluationUnavailableException.class)
+    public ResponseEntity<ErrorResponseDto> processAiEvaluationUnavailableError(AiEvaluationUnavailableException e) {
+        ErrorResponseDto response = new ErrorResponseDto(e.getMessage());
+        return ResponseEntity.status(503).body(response);
+    }
+
     @ExceptionHandler(AuthTokenExpiredException.class)
     public ResponseEntity<ErrorResponseDto> processAuthTokenExpiredError(AuthTokenExpiredException e) {
         ErrorResponseDto response = new ErrorResponseDto(e.getMessage());

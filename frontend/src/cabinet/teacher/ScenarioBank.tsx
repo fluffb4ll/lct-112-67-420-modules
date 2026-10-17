@@ -271,16 +271,18 @@ function GenerateModal({
     for (const [i, draft] of list.entries()) {
       if (closed.current) break;
       setProgress(`ИИ пишет сценарий ${i + 1} из ${list.length}…`);
-      // текст пишет языковая модель ИИ-контура; контур недоступен — остаётся текст шаблона
+      // текст пишет языковая модель ИИ-контура; контур недоступен — остаётся текст шаблона.
+      // Пометка «Сгенерирован ИИ» — только если текст действительно написала модель
       const comp = (comps.length ? comps : (['none'] as Complication[]))[i % Math.max(comps.length, 1)];
       const sc = await composeScenario(draft, comp, difficulty).then(
         (r) => {
-          if (r.by !== 'llm') byTemplate++;
-          return r.scenario;
+          if (r.by === 'llm') return { ...r.scenario, origin: 'generated' as const };
+          byTemplate++;
+          return { ...r.scenario, origin: 'teacher' as const };
         },
         () => {
           byTemplate++;
-          return draft;
+          return { ...draft, origin: 'teacher' as const };
         },
       );
       if (closed.current) break;
