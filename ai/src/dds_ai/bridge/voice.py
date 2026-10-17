@@ -16,11 +16,14 @@
   DDS_STT_MAX_SECONDS  — предел длительности записи, с (по умолчанию 120; больше — 422).
   DDS_VOICE_LOCK_TIMEOUT_S — сколько ждать, пока модель занята другой записью или фразой
                          (по умолчанию 15 с; дольше — 503 «занято, повторите»).
+  DDS_VOICE_DOWNLOAD_TIMEOUT_S — общий срок скачивания голоса Piper, с (по умолчанию 300).
 
 Модели STT и TTS грузятся под разными блокировками: долгая докачка голоса Piper не держит
-распознавание. Неудачная загрузка запоминается на `RETRY_LOAD_AFTER_S` (60 с): за это время
-запросы сразу получают 503, `/v1/voice` показывает модель недоступной; потом — новая попытка
-(том с моделями могли докачать, не перезапуская сервис).
+распознавание. После неудачной загрузки — пауза (`dds_ai.backoff`: 60 с, затем вдвое дольше
+каждый раз, не больше 15 мин): в паузу запросы сразу получают 503, `/v1/voice` показывает модель
+недоступной; потом — новая попытка (том с моделями могли докачать, не перезапуская сервис).
+Скачивание голоса ограничено общим сроком `DDS_VOICE_DOWNLOAD_TIMEOUT_S` (по умолчанию 300 с):
+медленная сеть не держит блокировку загрузки голоса бесконечно.
 
 Нет модели, нет пакета, сбой — `VoiceUnavailable`; фронт откатывается на Web Speech или ввод
 текстом (`frontend/src/training/voice.ts`).
@@ -39,6 +42,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
+from ..backoff import Backoff
 from ..ports import STTProvider, TTSProvider
 from ..voice.normalize import normalize_for_tts
 from ..voice.stt import AudioTooLong
@@ -60,7 +64,7 @@ STT_MAX_HINTS = 12
 STT_HINT_MAX_CHARS = 60
 STT_HINTS_MAX_CHARS = 300
 DEFAULT_VOICE_LOCK_TIMEOUT_S = 15.0
-RETRY_LOAD_AFTER_S = 60.0
+DEFAULT_VOICE_DOWNLOAD_TIMEOUT_S = 300.0
 
 
 class VoiceUnavailable(RuntimeError):
@@ -104,7 +108,11 @@ def clean_hints(hints: Iterable[str]) -> list[str]:
     return out
 
 
-def _download(url: str, dest: Path) -> None:
+def _download(
+    url: str, dest: Path, *, timeout_s: float, clock: Callable[[], float] = time.monotonic
+) -> None:
+    """Голос и его .json за общий срок `timeout_s`; не успели — TimeoutError, .part удалён."""
+    deadline = clock() + timeout_s
     dest.parent.mkdir(parents=True, exist_ok=True)
     for suffix in ("", ".json"):
         target = Path(f"{dest}{suffix}")
@@ -112,9 +120,22 @@ def _download(url: str, dest: Path) -> None:
             continue
         tmp = target.with_name(target.name + ".part")
         log.info("downloading %s", url + suffix)
-        with urllib.request.urlopen(url + suffix, timeout=60) as r, open(tmp, "wb") as f:
-            while chunk := r.read(1 << 16):
-                f.write(chunk)
+        try:
+            left = deadline - clock()
+            if left <= 0:
+                raise TimeoutError(f"скачивание голоса дольше {timeout_s:g} с")
+            # тайм-аут сокета — не дольше оставшегося срока: одно чтение не переживёт дедлайн
+            with (
+                urllib.request.urlopen(url + suffix, timeout=max(1.0, min(60.0, left))) as r,
+                open(tmp, "wb") as f,
+            ):
+                while chunk := r.read(1 << 16):
+                    if clock() > deadline:
+                        raise TimeoutError(f"скачивание голоса дольше {timeout_s:g} с")
+                    f.write(chunk)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         tmp.rename(target)
 
 
@@ -152,16 +173,19 @@ class VoiceService:
         self.lock_timeout_s = _env_num(
             self._env, "DDS_VOICE_LOCK_TIMEOUT_S", DEFAULT_VOICE_LOCK_TIMEOUT_S
         )
+        self.download_timeout_s = _env_num(
+            self._env, "DDS_VOICE_DOWNLOAD_TIMEOUT_S", DEFAULT_VOICE_DOWNLOAD_TIMEOUT_S
+        )
         self._stt = stt
         # голос → (адаптер, имя голоса); переданный адаптер обслуживает оба голоса
         self._tts: dict[str, tuple[TTSProvider, str]] = (
             {} if tts is None else {g: (tts, "default") for g in _ENV_SUFFIX}
         )
-        # последняя ошибка загрузки и когда она случилась (по `clock`)
+        # последняя ошибка загрузки и пауза до следующей попытки (по `clock`)
         self._stt_error: str | None = None
-        self._stt_failed_at = 0.0
+        self._stt_retry = Backoff(clock)
         self._tts_error: dict[str, str] = {}
-        self._tts_failed_at: dict[str, float] = {}
+        self._tts_retry = {g: Backoff(clock) for g in _ENV_SUFFIX}
         self._stt_load = threading.Lock()
         self._tts_load = threading.Lock()
         self._stt_run = threading.Lock()  # одна модель — одно распознавание за раз
@@ -169,14 +193,11 @@ class VoiceService:
 
     # --- что доступно ---
 
-    def _recent(self, failed_at: float | None) -> bool:
-        return failed_at is not None and self._clock() - failed_at < RETRY_LOAD_AFTER_S
-
     def _stt_down(self) -> bool:
-        return self._stt_error is not None and self._recent(self._stt_failed_at)
+        return self._stt_error is not None and self._stt_retry.waiting()
 
     def _tts_down(self, gender: str) -> bool:
-        return gender in self._tts_error and self._recent(self._tts_failed_at.get(gender))
+        return gender in self._tts_error and self._tts_retry[gender].waiting()
 
     def capabilities(self) -> dict[str, Any]:
         return {
@@ -228,10 +249,11 @@ class VoiceService:
             self._stt = FasterWhisperSTT(model, max_seconds=self.max_audio_seconds)
         except Exception as exc:
             self._stt_error = f"STT не загрузился: {exc}"
-            self._stt_failed_at = self._clock()
-            log.warning(self._stt_error)
+            self._stt_retry.failed()
+            log.warning("%s; повтор через %g с", self._stt_error, self._stt_retry.delay_s)
             raise VoiceUnavailable(self._stt_error) from exc
         self._stt_error = None
+        self._stt_retry.succeeded()
         return self._stt
 
     def _get_tts(self, gender: str) -> tuple[TTSProvider, str]:
@@ -264,14 +286,19 @@ class VoiceService:
             p = Path(path)
             if not p.exists():
                 _download(
-                    self._env.get(f"DDS_TTS_VOICE_URL{suffix}") or DEFAULT_VOICE_URLS[gender], p
+                    self._env.get(f"DDS_TTS_VOICE_URL{suffix}") or DEFAULT_VOICE_URLS[gender],
+                    p,
+                    timeout_s=self.download_timeout_s,
+                    clock=self._clock,
                 )
             self._tts[gender] = (PiperTTS(str(p), voice_name=p.stem), p.stem)
             self._tts_error.pop(gender, None)
+            self._tts_retry[gender].succeeded()
         except Exception as exc:
             self._tts_error[gender] = f"TTS ({gender}) не загрузился: {exc}"
-            self._tts_failed_at[gender] = self._clock()
-            log.warning(self._tts_error[gender])
+            retry = self._tts_retry[gender]
+            retry.failed()
+            log.warning("%s; повтор через %g с", self._tts_error[gender], retry.delay_s)
             if gender != "female":
                 return self._load_tts("female")
             raise VoiceUnavailable(self._tts_error[gender]) from exc
