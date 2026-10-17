@@ -3,6 +3,10 @@ package com.fluffb4ll.lct112HttpBackend.service;
 import com.fluffb4ll.lct112HttpBackend.dto.request.StartSessionRequestDto;
 import com.fluffb4ll.lct112HttpBackend.dto.response.IncomingCardDto;
 import com.fluffb4ll.lct112HttpBackend.dto.response.IncomingCardsStreamDto;
+import com.fluffb4ll.lct112HttpBackend.dto.response.OperatorCardSummaryDto;
+import com.fluffb4ll.lct112HttpBackend.dto.response.PageResponseDto;
+import com.fluffb4ll.lct112HttpBackend.dto.response.SessionDetailsDto;
+import com.fluffb4ll.lct112HttpBackend.dto.response.SessionDto;
 import com.fluffb4ll.lct112HttpBackend.entity.OperatorCardEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.RoleEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.ScenarioEntity;
@@ -16,11 +20,19 @@ import com.fluffb4ll.lct112HttpBackend.repository.ScenarioRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.SessionRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.StudyGroupMemberRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.StudyGroupRepository;
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.Path;
+import jakarta.persistence.criteria.Root;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 
 import javax.naming.AuthenticationException;
 import java.time.OffsetDateTime;
@@ -39,6 +51,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -220,5 +233,158 @@ class SessionServiceTest {
         assertTrue(e.getMessage().contains("approved"));
 
         verify(sessionRepository, never()).save(any());
+    }
+
+    // ───────────── просмотр занятий: кто что видит ─────────────
+
+    private final UUID groupId = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+    private final UUID studentId = UUID.fromString("00000000-0000-0000-0000-000000000042");
+    private final UUID classmateId = UUID.fromString("00000000-0000-0000-0000-000000000043");
+
+    private UserEntity user(UUID id, String roleName) {
+        RoleEntity role = mock(RoleEntity.class);
+        lenient().when(role.getName()).thenReturn(roleName);
+        UserEntity user = mock(UserEntity.class);
+        lenient().when(user.getId()).thenReturn(id);
+        lenient().when(user.getRole()).thenReturn(role);
+        return user;
+    }
+
+    private void loggedInAs(UserEntity user) throws AuthenticationException {
+        when(authService.verifyAuthToken(token, null)).thenReturn(user);
+    }
+
+    /** Занятие группы groupId с карточками двух обучающихся: studentId и classmateId */
+    private void sessionWithCardsOfTwoStudents() {
+        StudyGroupEntity group = mock(StudyGroupEntity.class);
+        lenient().when(group.getId()).thenReturn(groupId);
+        SessionEntity session = SessionEntity.builder().id(sessionId).studyGroup(group).build();
+        when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(session));
+        // заглушки пользователей готовим до when(...): вложенная настройка мока ломает Mockito
+        List<OperatorCardEntity> cards = List.of(
+                OperatorCardEntity.builder().id(UUID.randomUUID()).student(user(studentId, "ROLE_STUDENT")).build(),
+                OperatorCardEntity.builder().id(UUID.randomUUID()).student(user(classmateId, "ROLE_STUDENT")).build()
+        );
+        lenient().when(operatorCardRepository.findBySessionId(sessionId)).thenReturn(cards);
+    }
+
+    private static List<UUID> cardOwners(SessionDetailsDto details) {
+        return details.cards().stream().map(OperatorCardSummaryDto::studentId).toList();
+    }
+
+    @Test
+    void teacherSeesAllCardsOfSession() throws AuthenticationException {
+        loggedInAs(user(UUID.randomUUID(), "ROLE_TEACHER"));
+        sessionWithCardsOfTwoStudents();
+
+        SessionDetailsDto details = sessionService.getSession(token, sessionId);
+
+        assertEquals(List.of(studentId, classmateId), cardOwners(details));
+        verifyNoInteractions(studyGroupMemberRepository);
+    }
+
+    @Test
+    void adminSeesAllCardsOfSession() throws AuthenticationException {
+        loggedInAs(user(UUID.randomUUID(), "ROLE_ADMIN"));
+        sessionWithCardsOfTwoStudents();
+
+        SessionDetailsDto details = sessionService.getSession(token, sessionId);
+
+        assertEquals(List.of(studentId, classmateId), cardOwners(details));
+    }
+
+    @Test
+    void groupMemberSeesOnlyOwnCards() throws AuthenticationException {
+        loggedInAs(user(studentId, "ROLE_STUDENT"));
+        sessionWithCardsOfTwoStudents();
+        when(studyGroupMemberRepository.existsByIdGroupIdAndIdStudentId(groupId, studentId)).thenReturn(true);
+
+        SessionDetailsDto details = sessionService.getSession(token, sessionId);
+
+        assertEquals(List.of(studentId), cardOwners(details));
+    }
+
+    @Test
+    void outsiderCannotReadSessionCards() throws AuthenticationException {
+        UUID outsiderId = UUID.randomUUID();
+        loggedInAs(user(outsiderId, "ROLE_STUDENT"));
+        sessionWithCardsOfTwoStudents();
+        when(studyGroupMemberRepository.existsByIdGroupIdAndIdStudentId(groupId, outsiderId)).thenReturn(false);
+
+        AuthenticationException e = assertThrows(AuthenticationException.class,
+                () -> sessionService.getSession(token, sessionId));
+
+        // «permission» — фронт не разлогинивает на таком 401
+        assertTrue(e.getMessage().contains("permission"));
+        verify(operatorCardRepository, never()).findBySessionId(any());
+    }
+
+    @Test
+    void studentCannotReadSessionWithoutGroup() throws AuthenticationException {
+        loggedInAs(user(studentId, "ROLE_STUDENT"));
+        when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(SessionEntity.builder().id(sessionId).build()));
+
+        AuthenticationException e = assertThrows(AuthenticationException.class,
+                () -> sessionService.getSession(token, sessionId));
+
+        assertTrue(e.getMessage().contains("permission"));
+        verify(operatorCardRepository, never()).findBySessionId(any());
+    }
+
+    @SuppressWarnings("unchecked")
+    private Specification<SessionEntity> listedSpec() {
+        ArgumentCaptor<Specification<SessionEntity>> spec = ArgumentCaptor.forClass(Specification.class);
+        verify(sessionRepository).findAll(spec.capture(), any(Pageable.class));
+        return spec.getValue();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void stubFindAllEmpty() {
+        when(sessionRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
+    }
+
+    /** Применяет фильтр выборки к заглушкам Criteria API и возвращает путь studyGroup.id */
+    @SuppressWarnings("unchecked")
+    private static Path<Object> applyToGroupIdPath(Specification<SessionEntity> spec) {
+        Root<SessionEntity> root = mock(Root.class);
+        Path<Object> groupPath = mock(Path.class);
+        Path<Object> idPath = mock(Path.class);
+        lenient().when(root.get("studyGroup")).thenReturn(groupPath);
+        lenient().when(groupPath.get("id")).thenReturn(idPath);
+        spec.toPredicate(root, mock(CriteriaQuery.class), mock(CriteriaBuilder.class));
+        return idPath;
+    }
+
+    @Test
+    void studentListsOnlySessionsOfOwnGroups() throws AuthenticationException {
+        loggedInAs(user(studentId, "ROLE_STUDENT"));
+        when(studyGroupMemberRepository.findGroupIdsByStudentId(studentId)).thenReturn(List.of(groupId));
+        stubFindAllEmpty();
+
+        sessionService.getSessions(token, null, null, null, 0, 20);
+
+        verify(applyToGroupIdPath(listedSpec())).in(List.of(groupId));
+    }
+
+    @Test
+    void studentWithoutGroupsListsNothing() throws AuthenticationException {
+        loggedInAs(user(studentId, "ROLE_STUDENT"));
+        when(studyGroupMemberRepository.findGroupIdsByStudentId(studentId)).thenReturn(List.of());
+
+        PageResponseDto<SessionDto> page = sessionService.getSessions(token, null, null, null, 0, 20);
+
+        assertTrue(page.content().isEmpty());
+        verify(sessionRepository, never()).findAll(any(Specification.class), any(Pageable.class));
+    }
+
+    @Test
+    void teacherListsSessionsWithoutGroupRestriction() throws AuthenticationException {
+        loggedInAs(user(UUID.randomUUID(), "ROLE_TEACHER"));
+        stubFindAllEmpty();
+
+        sessionService.getSessions(token, null, null, null, 0, 20);
+
+        verify(applyToGroupIdPath(listedSpec()), never()).in(anyList());
+        verifyNoInteractions(studyGroupMemberRepository);
     }
 }

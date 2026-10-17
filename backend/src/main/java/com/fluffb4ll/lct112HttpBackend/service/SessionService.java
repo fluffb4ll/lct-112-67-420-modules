@@ -278,9 +278,23 @@ public class SessionService {
         SessionEntity session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new SessionException("Session not found"));
 
-        List<OperatorCardEntity> cards = operatorCardRepository.findBySessionId(sessionId);
+        if (isTeacherOrAdmin(currentUser)) {
+            return SessionDetailsDto.fromEntity(session, operatorCardRepository.findBySessionId(sessionId));
+        }
 
-        return SessionDetailsDto.fromEntity(session, cards);
+        // Обучающийся видит занятие своей группы и только собственные карточки
+        boolean isMember = session.getStudyGroup() != null && studyGroupMemberRepository.existsByIdGroupIdAndIdStudentId(
+                session.getStudyGroup().getId(),
+                currentUser.getId()
+        );
+        if (!isMember) {
+            // «permission» в тексте — иначе фронт сочтёт 401 истёкшей сессией и разлогинит
+            throw new AuthenticationException("You do not have permission to view this session");
+        }
+        List<OperatorCardEntity> ownCards = operatorCardRepository.findBySessionId(sessionId).stream()
+                .filter(c -> c.getStudent() != null && c.getStudent().getId().equals(currentUser.getId()))
+                .toList();
+        return SessionDetailsDto.fromEntity(session, ownCards);
     }
 
     @Transactional
@@ -292,7 +306,7 @@ public class SessionService {
             int page,
             int size
     ) throws AuthenticationException {
-        authService.verifyAuthToken(token, null);
+        UserEntity currentUser = authService.verifyAuthToken(token, null);
 
         int validatedSize = Math.clamp(size, 1, 100);
         int validatedPage = Math.max(page, 0);
@@ -303,11 +317,24 @@ public class SessionService {
                 Sort.by(Sort.Direction.DESC, "startedAt")
         );
 
+        // Обучающемуся — только занятия его групп
+        List<UUID> ownGroupIds = null;
+        if (!isTeacherOrAdmin(currentUser)) {
+            ownGroupIds = studyGroupMemberRepository.findGroupIdsByStudentId(currentUser.getId());
+            if (ownGroupIds.isEmpty()) {
+                return PageResponseDto.from(Page.<SessionDto>empty(pageable));
+            }
+        }
+        List<UUID> allowedGroupIds = ownGroupIds;
+
         Specification<SessionEntity> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
 
             if (studyGroupId != null) {
                 predicates.add(cb.equal(root.get("studyGroup").get("id"), studyGroupId));
+            }
+            if (allowedGroupIds != null) {
+                predicates.add(root.get("studyGroup").get("id").in(allowedGroupIds));
             }
             if (teacherId != null) {
                 predicates.add(cb.equal(root.get("teacher").get("id"), teacherId));
@@ -334,13 +361,18 @@ public class SessionService {
         if (user == null || user.getRole() == null) {
             throw new AuthenticationException("Unauthorized");
         }
-        String roleName = user.getRole().getName();
-        boolean isTeacherOrAdmin = "ROLE_ADMIN".equals(roleName)
-                || "ROLE_TEACHER".equals(roleName)
-                || (user.getRole().getPermissionsAsSet() != null && user.getRole().getPermissionsAsSet().contains(Permissions.TEACHER_CAN_EDIT_SCENARIOS.name()));
-
-        if (!isTeacherOrAdmin) {
+        if (!isTeacherOrAdmin(user)) {
             throw new AuthenticationException("You do not have permission to manage sessions");
         }
+    }
+
+    private static boolean isTeacherOrAdmin(UserEntity user) {
+        if (user == null || user.getRole() == null) {
+            return false;
+        }
+        String roleName = user.getRole().getName();
+        return "ROLE_ADMIN".equals(roleName)
+                || "ROLE_TEACHER".equals(roleName)
+                || (user.getRole().getPermissionsAsSet() != null && user.getRole().getPermissionsAsSet().contains(Permissions.TEACHER_CAN_EDIT_SCENARIOS.name()));
     }
 }
