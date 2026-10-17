@@ -22,12 +22,15 @@ import com.fluffb4ll.lct112HttpBackend.util.HttpRequestUtil;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.naming.AuthenticationException;
 import java.time.Duration;
@@ -35,7 +38,9 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class OperatorCardService {
@@ -115,8 +120,25 @@ public class OperatorCardService {
 
         OperatorCardEntity savedCard = operatorCardRepository.save(card);
 
-        // Immediate automatic AI scoring
-        evaluationService.triggerAiEvaluation(savedCard);
+        // Автоматическая оценка ИИ: после коммита и в фоне — языковая модель отвечает десятки секунд,
+        // сдача карточки не должна ждать её (и упираться в таймауты прокси).
+        UUID savedCardId = savedCard.getId();
+        Runnable evaluate = () -> CompletableFuture
+                .runAsync(() -> evaluationService.triggerAiEvaluationById(savedCardId))
+                .exceptionally(e -> {
+                    log.warn("AI evaluation failed for card {}", savedCardId, e);
+                    return null;
+                });
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    evaluate.run();
+                }
+            });
+        } else {
+            evaluate.run();
+        }
 
         auditService.logAction(
                 currentUser.getId(),

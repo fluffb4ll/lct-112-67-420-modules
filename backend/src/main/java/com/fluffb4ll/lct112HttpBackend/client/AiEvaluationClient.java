@@ -32,7 +32,7 @@ public class AiEvaluationClient {
     public AiEvaluationClient(
             @Value("${app.ai.service-url:http://localhost:8000}") String serviceUrl,
             @Value("${app.ai.connect-timeout-ms:5000}") int connectTimeoutMs,
-            @Value("${app.ai.read-timeout-ms:30000}") int readTimeoutMs,
+            @Value("${app.ai.read-timeout-ms:90000}") int readTimeoutMs,
             SystemIncidentService systemIncidentService
     ) {
         this.serviceUrl = serviceUrl;

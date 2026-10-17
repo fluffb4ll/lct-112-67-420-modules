@@ -41,6 +41,7 @@ public class PermissionsArrayToSetConverter implements AttributeConverter<Set<St
             }
 
             return Arrays.stream(intArray)
+                    .filter(Permissions::isKnown)
                     .map(Permissions::fromIndex)
                     .map(Permissions::name)
                     .collect(Collectors.toSet());

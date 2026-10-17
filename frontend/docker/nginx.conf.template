@@ -26,6 +26,20 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # ручной запуск оценки ИИ ждёт ответа языковой модели
+        proxy_read_timeout 120s;
+    }
+
+    # ИИ-контур: генерация текста сценариев, распознавание и синтез речи (frontend/src/api/ai.ts).
+    # /ai/v1/stt → ${AI_URL}/v1/stt
+    location /ai/ {
+        set $ai "${AI_URL}";
+        rewrite ^/ai/(.*)$ /$1 break;
+        proxy_pass $ai;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_read_timeout 120s;
+        client_max_body_size 20m;
     }
 
     # Проксирование WebSocket соединений (например, /ws/incoming-cards)

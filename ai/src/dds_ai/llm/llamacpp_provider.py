@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -97,6 +98,8 @@ class LlamaCppProvider:
             if json_grammar
             else None
         )
+        self._lock = threading.Lock()  # один контекст llama.cpp не допускает параллельных вызовов
+        self._schema_grammars: dict[str, Any] = {}
         self.timeout_s = timeout_s
         self.temperature = temperature
         self.seed = seed
@@ -108,12 +111,43 @@ class LlamaCppProvider:
         )
 
     def complete(self, prompt: str, *, max_tokens: int) -> str:
-        deadline = time.monotonic() + self.timeout_s
+        return self._generate(
+            prompt, max_tokens=max_tokens, grammar=self._grammar, timeout_s=self.timeout_s
+        )
+
+    def complete_json(
+        self,
+        prompt: str,
+        *,
+        schema: dict[str, Any],
+        max_tokens: int,
+        timeout_s: float | None = None,
+    ) -> str:
+        """Генерация под произвольную JSON-схему (оценка карточки, черновик сценария)."""
+        key = json.dumps(schema, sort_keys=True)
+        grammar = self._schema_grammars.get(key)
+        if grammar is None:
+            grammar = self._lib.LlamaGrammar.from_json_schema(key, verbose=False)
+            self._schema_grammars[key] = grammar
+        return self._generate(
+            prompt, max_tokens=max_tokens, grammar=grammar, timeout_s=timeout_s or self.timeout_s
+        )
+
+    def _generate(self, prompt: str, *, max_tokens: int, grammar: Any, timeout_s: float) -> str:
+        with self._lock:
+            return self._generate_locked(
+                prompt, max_tokens=max_tokens, grammar=grammar, timeout_s=timeout_s
+            )
+
+    def _generate_locked(
+        self, prompt: str, *, max_tokens: int, grammar: Any, timeout_s: float
+    ) -> str:
+        deadline = time.monotonic() + timeout_s
         kwargs: dict[str, Any] = {
             "max_tokens": max_tokens,
             "temperature": self.temperature,
             "seed": self.seed,
-            "grammar": self._grammar,
+            "grammar": grammar,
             "stream": True,
         }
         if self.chat:
@@ -129,7 +163,7 @@ class LlamaCppProvider:
             for piece in pieces:
                 out.append(piece)
                 if time.monotonic() >= deadline:
-                    raise TimeoutError(f"llama.cpp generation exceeded {self.timeout_s}s")
+                    raise TimeoutError(f"llama.cpp generation exceeded {timeout_s}s")
         finally:
             close = getattr(stream, "close", None)
             if close is not None:

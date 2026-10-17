@@ -40,4 +40,4 @@ app:
   ai:
     service-url: ${AI_SERVICE_URL:http://localhost:8000}
     connect-timeout-ms: 5000
-    read-timeout-ms: 30000
+    read-timeout-ms: 90000

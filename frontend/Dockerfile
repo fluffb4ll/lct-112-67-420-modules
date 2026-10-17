@@ -22,8 +22,10 @@ FROM nginx:1.27-alpine
 # Адрес бэкенда — без слеша на конце (иначе nginx срежет /api из пути).
 # В docker compose это имя сервиса бэкенда, например http://backend:8080
 ENV BACKEND_URL=http://backend:8080
-# подставлять в шаблоне только эту переменную, переменные самого nginx ($host, $uri) не трогать
-ENV NGINX_ENVSUBST_FILTER=BACKEND_URL
+# Адрес ИИ-контура — тоже без слеша на конце
+ENV AI_URL=http://ai:8090
+# подставлять в шаблоне только эти переменные, переменные самого nginx ($host, $uri) не трогать
+ENV NGINX_ENVSUBST_FILTER=^(BACKEND_URL|AI_URL)$
 
 COPY --from=build /app/dist /usr/share/nginx/html
 # Шаблон: штатный entrypoint nginx подставит в него BACKEND_URL при старте контейнера

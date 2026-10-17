@@ -424,13 +424,14 @@ export const useRun = create<RunState>((set, get) => {
         return;
       }
 
+      const chiefIds = s.service.contacts.filter((c) => c.isChief).map((c) => c.id);
       const evaluation = evaluateDds(
         events,
         cur.scenario,
         s.norms,
         cur.predicted,
         (skill) => pickNext(s.user!, skill, s.service.kind, cur.scenario.id),
-        s.service.contacts.filter((c) => c.isChief).map((c) => c.id),
+        chiefIds,
       );
       saveAttempt({
         id: cur.attemptId,
@@ -456,7 +457,10 @@ export const useRun = create<RunState>((set, get) => {
           void submitCard({
             sessionId: s.sessionId,
             scenarioId: cur.scenario.id,
-            submittedCard: toSubmittedCard(inc, s.service.id, report),
+            submittedCard: {
+              ...toSubmittedCard(inc, s.service.id, report),
+              trainingLog: { events, chiefContactIds: chiefIds, norms: s.norms },
+            },
             operatorNotes: report,
             startedAt: iso(cur.arrivedAt),
             submittedAt: iso(cur.finishedAt),

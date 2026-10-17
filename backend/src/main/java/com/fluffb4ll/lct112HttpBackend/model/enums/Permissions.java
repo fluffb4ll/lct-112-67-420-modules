@@ -21,6 +21,11 @@ public enum Permissions {
 
     private final int index;
 
+    /** Сид ролей резервирует номера впрок (ARRAY[0..9]); незаведённые в перечислении пропускаем. */
+    public static boolean isKnown(Integer index) {
+        return index != null && Arrays.stream(values()).anyMatch(p -> p.getIndex() == index);
+    }
+
     public static Permissions fromIndex(int index) {
         return Arrays.stream(values())
                 .filter(p -> p.getIndex() == index)

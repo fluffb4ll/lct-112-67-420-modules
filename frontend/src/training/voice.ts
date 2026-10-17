@@ -1,12 +1,15 @@
 /*
  * Голосовой канал эмулятора VoIP.
  *
- * В целевой архитектуре: микрофон → WebRTC/WebSocket → сервер (faster-whisper) → LLM → Silero TTS → обратно.
- * Без сервера (мок-режим) используем то, что есть в браузере:
+ * Основной путь — ИИ-контур (ai/, офлайн): синтез — Piper (`POST /ai/v1/tts`, мужской и женский голос),
+ * распознавание записи доклада — faster-whisper (`POST /ai/v1/stt`). Речь не уходит в облако.
+ * Если контур не запущен или без моделей — то, что есть в браузере:
  *  - синтез речи: speechSynthesis (голоса Windows/Linux работают офлайн; выбираем мужской/женский);
  *  - распознавание: Web Speech API, если доступно; иначе — ввод доклада текстом (режим «текстовые сообщения» из ТЗ).
- * Запись с микрофона (MediaRecorder) идёт всегда — её получает сервер для STT и хранения WAV/MP3.
+ * Запись с микрофона (MediaRecorder) идёт всегда — её распознаёт сервер.
  */
+
+import { synthesize, transcribe, voiceCapabilities } from '../api/ai';
 
 const MALE = /(pavel|dmitr|maxim|yuri|male|муж|павел|дмитрий)/i;
 const FEMALE = /(irina|svetlana|ekaterina|elena|anna|milena|female|жен|ирина|светлана|алёна|алена)/i;
@@ -20,7 +23,41 @@ export function ttsAvailable(): boolean {
   return 'speechSynthesis' in window;
 }
 
-export function speak(text: string, gender: 'male' | 'female'): Promise<void> {
+let playing: { audio: HTMLAudioElement; done: () => void } | null = null;
+
+/** Синтез на сервере; false — сервер не смог, нужен откат на браузер */
+async function speakServer(text: string, gender: 'male' | 'female'): Promise<boolean> {
+  if (!(await voiceCapabilities()).tts) return false;
+  let url = '';
+  try {
+    url = URL.createObjectURL(await synthesize(text, gender));
+    const audio = new Audio(url);
+    await new Promise<void>((resolve, reject) => {
+      const done = () => {
+        if (playing?.audio === audio) playing = null;
+        resolve();
+      };
+      stopSpeaking();
+      playing = { audio, done };
+      audio.onended = done;
+      audio.onerror = () => reject(new Error('audio'));
+      audio.play().catch(reject);
+    });
+    return true;
+  } catch {
+    playing = null;
+    return false;
+  } finally {
+    if (url) URL.revokeObjectURL(url);
+  }
+}
+
+export async function speak(text: string, gender: 'male' | 'female'): Promise<void> {
+  if (await speakServer(text, gender)) return;
+  return speakBrowser(text, gender);
+}
+
+function speakBrowser(text: string, gender: 'male' | 'female'): Promise<void> {
   return new Promise((resolve) => {
     if (!ttsAvailable()) {
       setTimeout(resolve, Math.min(6000, 600 + text.length * 45));
@@ -59,6 +96,12 @@ export function speak(text: string, gender: 'male' | 'female'): Promise<void> {
 }
 
 export function stopSpeaking() {
+  if (playing) {
+    const { audio, done } = playing;
+    playing = null;
+    audio.pause();
+    done();
+  }
   if (ttsAvailable()) window.speechSynthesis.cancel();
 }
 
@@ -80,6 +123,20 @@ type RecognitionCtor = new () => RecognitionLike;
 export function sttAvailable(): boolean {
   const w = window as unknown as { SpeechRecognition?: RecognitionCtor; webkitSpeechRecognition?: RecognitionCtor };
   return !!(w.SpeechRecognition ?? w.webkitSpeechRecognition);
+}
+
+/** Распознаёт ли сервер записи (faster-whisper). Тогда Web Speech не нужен */
+export async function serverSttAvailable(): Promise<boolean> {
+  return (await voiceCapabilities()).stt;
+}
+
+/** Распознать запись доклада на сервере; null — не удалось (откат на Web Speech или текст) */
+export async function recognize(audio: Blob, hints: string[] = []): Promise<string | null> {
+  try {
+    return (await transcribe(audio, hints)).text.trim();
+  } catch {
+    return null;
+  }
 }
 
 export interface Listener {

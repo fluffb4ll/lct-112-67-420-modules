@@ -109,6 +109,15 @@ public class EvaluationService {
         return EvaluationDto.fromEntity(savedEvaluation);
     }
 
+    /** Оценка ИИ после фиксации сданной карточки: вызывается вне потока запроса сдачи. */
+    @Transactional
+    public void triggerAiEvaluationById(UUID cardId) {
+        operatorCardRepository.findById(cardId).ifPresentOrElse(
+                this::triggerAiEvaluation,
+                () -> log.warn("Card {} disappeared before AI evaluation", cardId)
+        );
+    }
+
     @Transactional
     public EvaluationEntity triggerAiEvaluation(OperatorCardEntity card) {
         AiEvaluationMetricsDto metrics = new AiEvaluationMetricsDto(
@@ -149,7 +158,8 @@ public class EvaluationService {
         evaluation.setUpdatedAt(OffsetDateTime.now());
         EvaluationEntity savedEvaluation = evaluationRepository.save(evaluation);
 
-        if (card.getStatus() != OperatorCardStatus.EVALUATED && evaluation.getTeacherScore() != null) {
+        boolean scored = evaluation.getTeacherScore() != null || evaluation.getAiScore() != null;
+        if (card.getStatus() != OperatorCardStatus.EVALUATED && scored) {
             card.setStatus(OperatorCardStatus.EVALUATED);
             operatorCardRepository.save(card);
         }

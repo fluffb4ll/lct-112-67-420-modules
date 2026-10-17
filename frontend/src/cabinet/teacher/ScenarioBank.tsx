@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { PageResponse } from '../../api/admin';
 import { mutate } from '../../api/db';
+import { composeScenario } from '../../api/ai';
 import { describeError } from '../../api/errors';
 import { COMPLICATION_LABELS, generateScenarios, loadClassifier, upravaGroups, type Classifier, type Complication } from '../../api/generator';
 import {
@@ -190,14 +191,20 @@ export function ScenarioBank() {
           categories={categories}
           authorId={user.id}
           onClose={() => setGen(false)}
-          onDone={(n, failed) => {
+          onDone={(n, failed, byTemplate) => {
             setGen(false);
             setFilter('DRAFT');
             setPage(0);
             setMsg(
               failed
                 ? { tone: 'bad', text: `Сохранено черновиков: ${n}. Не удалось сохранить: ${failed}.` }
-                : { tone: 'ok', text: `ИИ сгенерировал черновиков: ${n}. Проверьте эталон и утвердите — после этого сценарии попадут в общий банк.` },
+                : {
+                    tone: 'ok',
+                    text:
+                      `Сгенерировано черновиков: ${n}` +
+                      (byTemplate ? ` (для ${byTemplate} ИИ-контур не ответил — текст из шаблона классификатора)` : ', текст написан ИИ') +
+                      '. Проверьте эталон и утвердите — после этого сценарии попадут в общий банк.',
+                  },
             );
             void reload();
           }}
@@ -216,7 +223,7 @@ function GenerateModal({
   categories: IncidentCategory[] | null;
   authorId: string;
   onClose: () => void;
-  onDone: (saved: number, failed: number) => void;
+  onDone: (saved: number, failed: number, byTemplate: number) => void;
 }) {
   const [c, setC] = useState<Classifier | null>(null);
   const [group, setGroup] = useState('');
@@ -226,6 +233,7 @@ function GenerateModal({
   const [comps, setComps] = useState<Complication[]>(['none', 'zone']);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [progress, setProgress] = useState('');
 
   useEffect(() => {
     let alive = true;
@@ -251,7 +259,21 @@ function GenerateModal({
     const list = generateScenarios(c, { group, difficulty, complications: comps, count, authorId });
     let saved = 0;
     let failed = 0;
-    for (const sc of list) {
+    let byTemplate = 0;
+    for (const [i, draft] of list.entries()) {
+      setProgress(`ИИ пишет сценарий ${i + 1} из ${list.length}…`);
+      // текст пишет языковая модель ИИ-контура; контур недоступен — остаётся текст шаблона
+      const comp = (comps.length ? comps : (['none'] as Complication[]))[i % Math.max(comps.length, 1)];
+      const sc = await composeScenario(draft, comp, difficulty).then(
+        (r) => {
+          if (r.by !== 'llm') byTemplate++;
+          return r.scenario;
+        },
+        () => {
+          byTemplate++;
+          return draft;
+        },
+      );
       try {
         const { scenarioId } = await createScenarioOnServer(toBody(sc, chosen));
         // зеркалим в локальные данные: занятия и тренажёр пока работают на них
@@ -263,7 +285,8 @@ function GenerateModal({
       }
     }
     setBusy(false);
-    if (saved) onDone(saved, failed);
+    setProgress('');
+    if (saved) onDone(saved, failed, byTemplate);
   };
 
   return (
@@ -274,7 +297,7 @@ function GenerateModal({
         <>
           <Button onClick={onClose}>Отмена</Button>
           <Button variant="primary" disabled={!c || !group || chosen === '' || busy} onClick={() => void run()}>
-            {busy ? 'Генерация…' : 'Сгенерировать'}
+            {busy ? progress || 'Генерация…' : 'Сгенерировать'}
           </Button>
         </>
       }

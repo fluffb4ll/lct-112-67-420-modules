@@ -6,6 +6,7 @@ import {
   endSession,
   evaluateCard,
   getEvaluation,
+  requestAiEvaluation,
   getSession,
   listSessions,
   startSession,
@@ -399,6 +400,18 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
     }
   };
 
+  const askAi = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      setEvaluation(await requestAiEvaluation(card.id));
+    } catch (e) {
+      setErr(describeError(e, 'ИИ-контур не ответил'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const errors = evaluation?.aiComplianceErrors ? Object.entries(evaluation.aiComplianceErrors) : [];
 
   return (
@@ -408,6 +421,9 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
       footer={
         <>
           <Button onClick={onClose}>Отмена</Button>
+          <Button disabled={busy} onClick={() => void askAi()}>
+            {evaluation?.aiScore != null ? 'Оценить ИИ заново' : 'Запросить оценку ИИ'}
+          </Button>
           <Button variant="primary" disabled={busy} onClick={() => void save()}>
             {busy ? 'Сохранение…' : 'Сохранить оценку'}
           </Button>
@@ -424,8 +440,8 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
               <b>Оценка ИИ:</b> {evaluation.aiScore ?? '—'}
               {evaluation.finalScore != null && <span className="text-c-muted"> · итог {evaluation.finalScore}</span>}
             </div>
-            {evaluation.aiRecommendations && <div className="mt-1 text-c-muted">{evaluation.aiRecommendations}</div>}
-            {!!errors.length && (
+            {evaluation.aiRecommendations && <div className="mt-1 whitespace-pre-line text-c-muted">{evaluation.aiRecommendations}</div>}
+            {!evaluation.aiRecommendations && !!errors.length && (
               <ul className="mt-1 list-disc pl-5 text-c-muted">
                 {errors.map(([k, v]) => (
                   <li key={k}>
