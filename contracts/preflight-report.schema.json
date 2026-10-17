@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dds-ai/preflight-report/0.4.0-draft",
+  "$defs": {
+    "ComponentHealth": {
+      "enum": [
+        "up",
+        "overloaded",
+        "down"
+      ],
+      "title": "ComponentHealth",
+      "type": "string"
+    },
+    "ComponentName": {
+      "enum": [
+        "stt",
+        "tts",
+        "llm",
+        "semantic_judge",
+        "recommender",
+        "embedder"
+      ],
+      "title": "ComponentName",
+      "type": "string"
+    },
+    "ComponentStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/ComponentName"
+        },
+        "health": {
+          "$ref": "#/$defs/ComponentHealth"
+        },
+        "model_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Version"
+        },
+        "queue_length": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Queue Length",
+          "type": "integer"
+        },
+        "lane": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Lane"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Полоса исполнителя; None — вне воркера"
+        },
+        "running": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Running",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "component",
+        "health"
+      ],
+      "title": "ComponentStatus",
+      "type": "object"
+    },
+    "Lane": {
+      "description": "Синхронная нагрузка живого звонка отделена от фоновой.",
+      "enum": [
+        "interactive",
+        "background"
+      ],
+      "title": "Lane",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "profile": {
+      "description": "cpu | gpu",
+      "minLength": 1,
+      "title": "Profile",
+      "type": "string"
+    },
+    "components": {
+      "items": {
+        "$ref": "#/$defs/ComponentStatus"
+      },
+      "title": "Components",
+      "type": "array"
+    },
+    "voice_path_ok": {
+      "title": "Voice Path Ok",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "profile",
+    "components",
+    "voice_path_ok"
+  ],
+  "title": "PreflightReport",
+  "type": "object"
+}
