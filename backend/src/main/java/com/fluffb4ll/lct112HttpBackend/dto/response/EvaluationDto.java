@@ -52,6 +52,16 @@ public record EvaluationDto(
         );
     }
 
+    /** Оценка ИИ по карточке идёт прямо сейчас: PENDING, ещё не зависший */
+    public static boolean isAiRunning(EvaluationEntity entity) {
+        return entity.getAiStatus() == AiEvaluationStatus.PENDING && !isStalePending(entity);
+    }
+
+    private static boolean isStalePending(EvaluationEntity entity) {
+        return entity.getUpdatedAt() != null
+                && entity.getUpdatedAt().isBefore(OffsetDateTime.now().minus(STALE_PENDING_AFTER));
+    }
+
     /**
      * Статус оценки ИИ. Неудачный перезапуск ставит UNAVAILABLE, но прежние поля ИИ не стирает —
      * преподаватель видит и старую оценку, и то, что последняя попытка не удалась.
@@ -59,8 +69,7 @@ public record EvaluationDto(
      * Зависший PENDING отдаётся как UNAVAILABLE, чтобы «ИИ оценивает…» не висело вечно.
      */
     private static AiEvaluationStatus aiStatusOf(EvaluationEntity entity) {
-        if (entity.getAiStatus() == AiEvaluationStatus.PENDING && entity.getUpdatedAt() != null
-                && entity.getUpdatedAt().isBefore(OffsetDateTime.now().minus(STALE_PENDING_AFTER))) {
+        if (entity.getAiStatus() == AiEvaluationStatus.PENDING && isStalePending(entity)) {
             return AiEvaluationStatus.UNAVAILABLE;
         }
         if (entity.getAiStatus() != null) {

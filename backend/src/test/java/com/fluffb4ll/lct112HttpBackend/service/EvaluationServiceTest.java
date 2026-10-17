@@ -15,6 +15,7 @@ import com.fluffb4ll.lct112HttpBackend.repository.EvaluationRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -29,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Executor;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -57,14 +59,8 @@ class EvaluationServiceTest {
         authService = mock(AuthService.class);
         aiEvaluationClient = mock(AiEvaluationClient.class);
         transactionManager = new RecordingTransactionManager();
-        service = new EvaluationService(
-                evaluationRepository,
-                operatorCardRepository,
-                authService,
-                mock(AuditService.class),
-                aiEvaluationClient,
-                transactionManager
-        );
+        // Пул ИИ — в потоке теста: журнал транзакций и порядок вызовов остаются детерминированными
+        service = service(Runnable::run, 100_000);
 
         student = user("ROLE_STUDENT");
         teacher = user("ROLE_TEACHER");
@@ -327,7 +323,127 @@ class EvaluationServiceTest {
         assertEquals(evaluation.getId(), service.getEvaluationByCardId(token, card.getId()).id());
     }
 
+    // --- партия 3, п.2: один пересчёт ИИ на карточку, общий пул ---
+
+    @Test
+    void manualRunWhileAnotherIsRunningReturnsPendingWithoutSecondAiCall() throws Exception {
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.of(runningEvaluation()));
+
+        EvaluationDto result = service.evaluateWithAi(token, card.getId());
+
+        assertEquals(AiEvaluationStatus.PENDING, result.aiStatus());
+        verify(aiEvaluationClient, never()).requestEvaluation(any());
+        verify(evaluationRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void backgroundRunIsSkippedWhileManualRunIsRunning() {
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.of(runningEvaluation()));
+
+        service.triggerAiEvaluationById(card.getId());
+
+        verify(aiEvaluationClient, never()).requestEvaluation(any());
+        verify(evaluationRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void stalePendingDoesNotBlockNewRun() throws Exception {
+        // Прежний запуск оборвался (рестарт) — его PENDING не должен навсегда запретить пересчёт
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        EvaluationEntity stale = runningEvaluation();
+        stale.setUpdatedAt(OffsetDateTime.now().minusMinutes(30));
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.of(stale));
+        when(evaluationRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(aiEvaluationClient.requestEvaluation(any())).thenReturn(Optional.of(aiResponse(64)));
+
+        EvaluationDto result = service.evaluateWithAi(token, card.getId());
+
+        assertEquals(AiEvaluationStatus.OK, result.aiStatus());
+        assertEquals(64, result.aiScore());
+    }
+
+    @Test
+    void manualRunGoesThroughAiExecutor() throws Exception {
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.empty());
+        when(evaluationRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        List<String> calls = new ArrayList<>();
+        when(aiEvaluationClient.requestEvaluation(any())).thenAnswer(inv -> {
+            calls.add(Thread.currentThread().getName());
+            return Optional.of(aiResponse(70));
+        });
+        Executor pool = task -> {
+            Thread thread = new Thread(task, "ai-eval-test");
+            thread.start();
+        };
+
+        service(pool, 10_000).evaluateWithAi(token, card.getId());
+
+        assertEquals(List.of("ai-eval-test"), calls);
+    }
+
+    @Test
+    void fullAiQueueGives503AndRestoresPreviousStatus() throws Exception {
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        EvaluationEntity existing = new EvaluationEntity(card);
+        existing.setAiScore(55);
+        existing.setAiStatus(AiEvaluationStatus.OK);
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.of(existing));
+        List<AiEvaluationStatus> savedStatuses = recordSavedStatuses();
+        Executor full = task -> {
+            throw new TaskRejectedException("queue is full");
+        };
+
+        AiEvaluationUnavailableException e = assertThrows(AiEvaluationUnavailableException.class,
+                () -> service(full, 10_000).evaluateWithAi(token, card.getId()));
+
+        assertEquals(EvaluationService.AI_QUEUE_FULL_MESSAGE, e.getMessage());
+        verify(aiEvaluationClient, never()).requestEvaluation(any());
+        // Захват снят: запуск не начался, поэтому не «ИИ недоступен», а прежний статус
+        assertEquals(List.of(AiEvaluationStatus.PENDING, AiEvaluationStatus.OK), savedStatuses);
+        assertEquals(AiEvaluationStatus.OK, existing.getAiStatus());
+    }
+
+    @Test
+    void slowRunReturnsPendingInsteadOfHoldingRequest() throws Exception {
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        EvaluationEntity row = new EvaluationEntity(card);
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.of(row));
+        when(evaluationRepository.findByCardId(card.getId())).thenReturn(Optional.of(row));
+        when(evaluationRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        // Задача стоит в очереди пула и ещё не начата
+        List<Runnable> queued = new ArrayList<>();
+
+        EvaluationDto result = service(queued::add, 0).evaluateWithAi(token, card.getId());
+
+        assertEquals(AiEvaluationStatus.PENDING, result.aiStatus());
+        assertEquals(1, queued.size());
+        verify(aiEvaluationClient, never()).requestEvaluation(any());
+    }
+
     // --- вспомогательное ---
+
+    private EvaluationService service(Executor aiExecutor, long manualRunWaitMs) {
+        return new EvaluationService(
+                evaluationRepository,
+                operatorCardRepository,
+                authService,
+                mock(AuditService.class),
+                aiEvaluationClient,
+                transactionManager,
+                aiExecutor,
+                manualRunWaitMs
+        );
+    }
+
+    /** Строка оценки, по которой прямо сейчас идёт запуск ИИ */
+    private EvaluationEntity runningEvaluation() {
+        EvaluationEntity evaluation = new EvaluationEntity(card);
+        evaluation.setAiStatus(AiEvaluationStatus.PENDING);
+        evaluation.setUpdatedAt(OffsetDateTime.now());
+        return evaluation;
+    }
 
     private List<AiEvaluationStatus> recordSavedStatuses() {
         List<AiEvaluationStatus> statuses = new ArrayList<>();
