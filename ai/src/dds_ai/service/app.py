@@ -32,6 +32,7 @@ from dds_ai.contracts import CONTRACTS_VERSION, SCHEMA_MODELS
 from dds_ai.contracts.events import DispatcherDecision, attempt_event_adapter
 from dds_ai.contracts.rubric import Rubric
 from dds_ai.cycle import Channel, TrainingSession, load_synthetic
+from dds_ai.llm.errors import LLMBusy
 from dds_ai.ports import LLMProvider, SemanticJudge
 
 log = logging.getLogger(__name__)
@@ -185,6 +186,11 @@ def create_app(
     def compose(body: dict[str, Any]) -> dict[str, Any]:
         try:
             return compose_scenario(body, llm)
+        except LLMBusy as exc:
+            # фронт на любой ошибке оставляет текст шаблона; 503 — честнее, чем «by: template»
+            raise HTTPException(
+                503, "языковая модель занята другим запросом — повторите позже"
+            ) from exc
         except (ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
             raise HTTPException(422, f"bad scenario draft: {exc}") from exc
 

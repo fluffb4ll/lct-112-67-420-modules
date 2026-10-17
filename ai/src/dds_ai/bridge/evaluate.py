@@ -22,6 +22,7 @@ import re
 from collections import Counter
 from typing import Any
 
+from ..llm.errors import LLMBusy
 from ..ports import LLMProvider
 from .llm import ask_json
 from .rules import SKILL_ADVICE, SKILL_LABELS, Norms, RuleResult, evaluate_rules, extract_facts
@@ -233,13 +234,17 @@ def evaluate_card(request: dict[str, Any], llm: LLMProvider | None) -> dict[str,
     norms = _norms(log, metrics)
     rr = evaluate_rules(scenario, expected, facts, norms)
 
-    verdict = ask_json(
-        llm,
-        _judge_prompt(scenario, expected, card, rr),
-        schema=JUDGE_SCHEMA,
-        max_tokens=480,
-        timeout_s=JUDGE_TIMEOUT_S,
-    )
+    busy = False
+    try:
+        verdict = ask_json(
+            llm,
+            _judge_prompt(scenario, expected, card, rr),
+            schema=JUDGE_SCHEMA,
+            max_tokens=480,
+            timeout_s=JUDGE_TIMEOUT_S,
+        )
+    except LLMBusy:
+        verdict, busy = None, True
     steered = _tries_to_steer(rr)
     if verdict is not None and not steered:
         _apply_judge(rr, verdict, call_required=bool(expected.get("callRequired")))
@@ -266,6 +271,8 @@ def evaluate_card(request: dict[str, Any], llm: LLMProvider | None) -> dict[str,
             text.append("Разбор: Вы отработали карточку по регламенту.")
     elif llm is None:
         text.append("Языковая модель не подключена — оценка по правилам регламента.")
+    elif busy:
+        text.append("Языковая модель занята другими проверками — оценка по правилам регламента.")
     else:
         text.append("Языковая модель не ответила вовремя — оценка по правилам регламента.")
     if failed:

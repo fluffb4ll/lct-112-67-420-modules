@@ -14,6 +14,8 @@
                          (по умолчанию rhasspy/piper-voices: irina и denis).
   DDS_STT_MAX_BYTES    — предел размера записи, байт (по умолчанию 10 МБ; больше — 413).
   DDS_STT_MAX_SECONDS  — предел длительности записи, с (по умолчанию 120; больше — 422).
+  DDS_VOICE_LOCK_TIMEOUT_S — сколько ждать, пока модель занята другой записью или фразой
+                         (по умолчанию 15 с; дольше — 503 «занято, повторите»).
 
 Нет модели, нет пакета, сбой — `VoiceUnavailable`; фронт откатывается на Web Speech или ввод
 текстом (`frontend/src/training/voice.ts`).
@@ -51,10 +53,15 @@ MAX_TTS_CHARS = 600
 STT_MAX_HINTS = 12
 STT_HINT_MAX_CHARS = 60
 STT_HINTS_MAX_CHARS = 300
+DEFAULT_VOICE_LOCK_TIMEOUT_S = 15.0
 
 
 class VoiceUnavailable(RuntimeError):
     pass
+
+
+class VoiceBusy(VoiceUnavailable):
+    """Модель занята другим запросом дольше срока ожидания — 503, можно повторить."""
 
 
 class AudioTooLarge(ValueError):
@@ -132,6 +139,9 @@ class VoiceService:
         )
         self.max_audio_seconds = _env_num(
             self._env, "DDS_STT_MAX_SECONDS", DEFAULT_MAX_AUDIO_SECONDS
+        )
+        self.lock_timeout_s = _env_num(
+            self._env, "DDS_VOICE_LOCK_TIMEOUT_S", DEFAULT_VOICE_LOCK_TIMEOUT_S
         )
         self._stt = stt
         # голос → (адаптер, имя голоса); переданный адаптер обслуживает оба голоса
@@ -232,13 +242,16 @@ class VoiceService:
         if len(audio) > self.max_audio_bytes:
             raise AudioTooLarge(self.max_audio_bytes)
         stt = self._get_stt()
-        with self._stt_run:
-            try:
-                segments = stt.transcribe(audio, hints=tuple(clean_hints(hints or ())))
-            except AudioTooLong:
-                raise
-            except Exception as exc:
-                raise VoiceUnavailable(f"распознавание не удалось: {exc}") from exc
+        if not self._stt_run.acquire(timeout=self.lock_timeout_s):
+            raise VoiceBusy("сервер распознаёт другую запись — повторите через несколько секунд")
+        try:
+            segments = stt.transcribe(audio, hints=tuple(clean_hints(hints or ())))
+        except AudioTooLong:
+            raise
+        except Exception as exc:
+            raise VoiceUnavailable(f"распознавание не удалось: {exc}") from exc
+        finally:
+            self._stt_run.release()
         text = " ".join(s.text for s in segments if s.text).strip()
         conf = [s.confidence for s in segments if s.confidence is not None]
         return {
@@ -252,13 +265,14 @@ class VoiceService:
         if not text:
             raise ValueError("пустой текст")
         tts, voice_name = self._get_tts(voice)
-        with self._tts_run:
-            try:
-                pcm = tts.synthesize(
-                    normalize_for_tts(text), voice=voice_name, intonation=intonation
-                )
-            except Exception as exc:
-                raise VoiceUnavailable(f"синтез не удался: {exc}") from exc
+        if not self._tts_run.acquire(timeout=self.lock_timeout_s):
+            raise VoiceBusy("сервер озвучивает другую фразу — повторите через несколько секунд")
+        try:
+            pcm = tts.synthesize(normalize_for_tts(text), voice=voice_name, intonation=intonation)
+        except Exception as exc:
+            raise VoiceUnavailable(f"синтез не удался: {exc}") from exc
+        finally:
+            self._tts_run.release()
         return pcm_to_wav(pcm, int(getattr(tts, "sample_rate", 22050)))
 
 
