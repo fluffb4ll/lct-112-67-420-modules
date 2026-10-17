@@ -147,3 +147,12 @@ def test_adapter_timeout_is_logged_by_worker_as_timeout(llama, gguf):
         w.call(ComponentName.LLM, Lane.INTERACTIVE, lambda: p.complete("x", max_tokens=8))
     assert exc.value.kind is FailureKind.TIMEOUT
     assert w.injector.log[-1].kind is FailureKind.TIMEOUT
+
+
+def test_model_name_comes_from_gguf_metadata_not_file_name(llama, gguf, monkeypatch):
+    # в compose-стенде файл зовётся model.gguf, и model_name был «model»
+    monkeypatch.setattr(
+        FakeLlama, "metadata", {"general.name": "Qwen2.5 1.5B Instruct"}, raising=False
+    )
+    assert LlamaCppProvider(gguf).model_ref.model_name == "Qwen2.5 1.5B Instruct"
+    assert LlamaCppProvider(gguf, model_name="x").model_ref.model_name == "x"

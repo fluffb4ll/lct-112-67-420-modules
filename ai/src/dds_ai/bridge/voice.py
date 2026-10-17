@@ -12,6 +12,18 @@
   DDS_TTS_VOICE_PATH_MALE — путь к мужскому голосу; пусто — мужские реплики женским голосом.
   DDS_TTS_VOICE_URL, DDS_TTS_VOICE_URL_MALE — откуда скачать голос, если файла нет
                          (по умолчанию rhasspy/piper-voices: irina и denis).
+  DDS_STT_MAX_BYTES    — предел размера записи, байт (по умолчанию 10 МБ; больше — 413).
+  DDS_STT_MAX_SECONDS  — предел длительности записи, с (по умолчанию 120; больше — 422).
+  DDS_VOICE_LOCK_TIMEOUT_S — сколько ждать, пока модель занята другой записью или фразой
+                         (по умолчанию 15 с; дольше — 503 «занято, повторите»).
+  DDS_VOICE_DOWNLOAD_TIMEOUT_S — общий срок скачивания голоса Piper, с (по умолчанию 300).
+
+Модели STT и TTS грузятся под разными блокировками: долгая докачка голоса Piper не держит
+распознавание. После неудачной загрузки — пауза (`dds_ai.backoff`: 60 с, затем вдвое дольше
+каждый раз, не больше 15 мин): в паузу запросы сразу получают 503, `/v1/voice` показывает модель
+недоступной; потом — новая попытка (том с моделями могли докачать, не перезапуская сервис).
+Скачивание голоса ограничено общим сроком `DDS_VOICE_DOWNLOAD_TIMEOUT_S` (по умолчанию 300 с):
+медленная сеть не держит блокировку загрузки голоса бесконечно.
 
 Нет модели, нет пакета, сбой — `VoiceUnavailable`; фронт откатывается на Web Speech или ввод
 текстом (`frontend/src/training/voice.ts`).
@@ -23,13 +35,17 @@ import io
 import logging
 import os
 import threading
+import time
 import urllib.request
 import wave
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
+from ..backoff import Backoff
 from ..ports import STTProvider, TTSProvider
 from ..voice.normalize import normalize_for_tts
+from ..voice.stt import AudioTooLong
 
 log = logging.getLogger(__name__)
 
@@ -39,15 +55,64 @@ DEFAULT_VOICE_URLS = {
     "male": f"{PIPER_VOICES}/denis/medium/ru_RU-denis-medium.onnx",
 }
 _ENV_SUFFIX = {"female": "", "male": "_MALE"}
-MAX_AUDIO_BYTES = 15 * 1024 * 1024
+DEFAULT_MAX_AUDIO_BYTES = 10 * 1024 * 1024
+DEFAULT_MAX_AUDIO_SECONDS = 120.0
 MAX_TTS_CHARS = 600
+# Подсказки распознаванию (адрес, тип происшествия, ключевые слова доклада) идут в
+# initial_prompt whisper, а у него окно ~224 токена: длинный список обрезаем, а не роняем запрос.
+STT_MAX_HINTS = 12
+STT_HINT_MAX_CHARS = 60
+STT_HINTS_MAX_CHARS = 300
+DEFAULT_VOICE_LOCK_TIMEOUT_S = 15.0
+DEFAULT_VOICE_DOWNLOAD_TIMEOUT_S = 300.0
 
 
 class VoiceUnavailable(RuntimeError):
     pass
 
 
-def _download(url: str, dest: Path) -> None:
+class VoiceBusy(VoiceUnavailable):
+    """Модель занята другим запросом дольше срока ожидания — 503, можно повторить."""
+
+
+class AudioTooLarge(ValueError):
+    """Запись больше предела по размеру — 413."""
+
+    def __init__(self, limit: int):
+        super().__init__(f"запись больше {limit / 1024 / 1024:g} МБ — сократите доклад")
+
+
+def _env_num(env: dict[str, str], name: str, default: float) -> float:
+    try:
+        value = float(env.get(name) or default)
+    except ValueError:
+        log.warning("%s=%r — не число, беру %s", name, env.get(name), default)
+        return default
+    return value if value > 0 else default
+
+
+def clean_hints(hints: Iterable[str]) -> list[str]:
+    """Подсказки без пустых и повторов, каждая и весь список — в пределах длины."""
+    out: list[str] = []
+    seen: set[str] = set()
+    total = 0
+    for raw in hints:
+        hint = " ".join(str(raw).split())[:STT_HINT_MAX_CHARS]
+        if not hint or hint.lower() in seen:
+            continue
+        if len(out) >= STT_MAX_HINTS or total + len(hint) > STT_HINTS_MAX_CHARS:
+            break
+        seen.add(hint.lower())
+        out.append(hint)
+        total += len(hint) + 2  # ", " между подсказками
+    return out
+
+
+def _download(
+    url: str, dest: Path, *, timeout_s: float, clock: Callable[[], float] = time.monotonic
+) -> None:
+    """Голос и его .json за общий срок `timeout_s`; не успели — TimeoutError, .part удалён."""
+    deadline = clock() + timeout_s
     dest.parent.mkdir(parents=True, exist_ok=True)
     for suffix in ("", ".json"):
         target = Path(f"{dest}{suffix}")
@@ -55,9 +120,23 @@ def _download(url: str, dest: Path) -> None:
             continue
         tmp = target.with_name(target.name + ".part")
         log.info("downloading %s", url + suffix)
-        with urllib.request.urlopen(url + suffix, timeout=60) as r, open(tmp, "wb") as f:
-            while chunk := r.read(1 << 16):
-                f.write(chunk)
+        try:
+            left = deadline - clock()
+            if left <= 0:
+                raise TimeoutError(f"скачивание голоса дольше {timeout_s:g} с")
+            # тайм-аут сокета задаётся на соединение и действует на каждое чтение: срок
+            # проверяется между чтениями, зависшее чтение превысит его не больше чем на 60 с
+            with (
+                urllib.request.urlopen(url + suffix, timeout=max(1.0, min(60.0, left))) as r,
+                open(tmp, "wb") as f,
+            ):
+                while chunk := r.read(1 << 16):
+                    if clock() > deadline:
+                        raise TimeoutError(f"скачивание голоса дольше {timeout_s:g} с")
+                    f.write(chunk)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         tmp.rename(target)
 
 
@@ -82,30 +161,51 @@ class VoiceService:
         stt: STTProvider | None = None,
         tts: TTSProvider | None = None,
         env: dict[str, str] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ):
+        self._clock = clock
         self._env = dict(os.environ if env is None else env)
+        self.max_audio_bytes = int(
+            _env_num(self._env, "DDS_STT_MAX_BYTES", DEFAULT_MAX_AUDIO_BYTES)
+        )
+        self.max_audio_seconds = _env_num(
+            self._env, "DDS_STT_MAX_SECONDS", DEFAULT_MAX_AUDIO_SECONDS
+        )
+        self.lock_timeout_s = _env_num(
+            self._env, "DDS_VOICE_LOCK_TIMEOUT_S", DEFAULT_VOICE_LOCK_TIMEOUT_S
+        )
+        self.download_timeout_s = _env_num(
+            self._env, "DDS_VOICE_DOWNLOAD_TIMEOUT_S", DEFAULT_VOICE_DOWNLOAD_TIMEOUT_S
+        )
         self._stt = stt
         # голос → (адаптер, имя голоса); переданный адаптер обслуживает оба голоса
         self._tts: dict[str, tuple[TTSProvider, str]] = (
             {} if tts is None else {g: (tts, "default") for g in _ENV_SUFFIX}
         )
+        # последняя ошибка загрузки и пауза до следующей попытки (по `clock`)
         self._stt_error: str | None = None
+        self._stt_retry = Backoff(clock)
         self._tts_error: dict[str, str] = {}
-        self._lock = threading.Lock()
+        self._tts_retry = {g: Backoff(clock) for g in _ENV_SUFFIX}
+        self._stt_load = threading.Lock()
+        self._tts_load = threading.Lock()
         self._stt_run = threading.Lock()  # одна модель — одно распознавание за раз
         self._tts_run = threading.Lock()
 
     # --- что доступно ---
 
+    def _stt_down(self) -> bool:
+        return self._stt_error is not None and self._stt_retry.waiting()
+
+    def _tts_down(self, gender: str) -> bool:
+        return gender in self._tts_error and self._tts_retry[gender].waiting()
+
     def capabilities(self) -> dict[str, Any]:
         return {
             "stt": self._stt is not None
-            or (_present(self._env.get("DDS_STT_MODEL", "")) and self._stt_error is None),
+            or (_present(self._env.get("DDS_STT_MODEL", "")) and not self._stt_down()),
             "tts": "female" in self._tts
-            or (
-                _present(self._env.get("DDS_TTS_VOICE_PATH", ""))
-                and "female" not in self._tts_error
-            ),
+            or (_present(self._env.get("DDS_TTS_VOICE_PATH", "")) and not self._tts_down("female")),
             "sttModel": None if self._stt is None else self._stt.model_ref.model_dump(mode="json"),
             "ttsModels": {
                 g: t.model_ref.model_dump(mode="json") for g, (t, _) in self._tts.items()
@@ -113,8 +213,8 @@ class VoiceService:
             "errors": {
                 k: v
                 for k, v in {
-                    "stt": self._stt_error,
-                    **{f"tts_{g}": e for g, e in self._tts_error.items()},
+                    "stt": self._stt_error if self._stt_down() else None,
+                    **{f"tts_{g}": e for g, e in self._tts_error.items() if self._tts_down(g)},
                 }.items()
                 if v
             },
@@ -122,37 +222,60 @@ class VoiceService:
 
     # --- ленивая загрузка ---
 
-    def _get_stt(self) -> STTProvider:
-        with self._lock:
-            if self._stt is not None:
-                return self._stt
-            model = self._env.get("DDS_STT_MODEL", "")
-            if not model:
-                raise VoiceUnavailable("STT не настроен (DDS_STT_MODEL)")
-            if self._stt_error:
-                raise VoiceUnavailable(self._stt_error)
-            try:
-                from ..voice.stt.faster_whisper_provider import FasterWhisperSTT
+    def _wait_load(self, lock: threading.Lock, what: str) -> None:
+        # первая загрузка (и скачивание голоса) идёт под блокировкой; ждём её не дольше, чем работу
+        if not lock.acquire(timeout=self.lock_timeout_s):
+            raise VoiceBusy(f"{what} ещё загружается — повторите через несколько секунд")
 
-                self._stt = FasterWhisperSTT(model)
-            except Exception as exc:
-                self._stt_error = f"STT не загрузился: {exc}"
-                log.warning(self._stt_error)
-                raise VoiceUnavailable(self._stt_error) from exc
+    def _get_stt(self) -> STTProvider:
+        if self._stt is not None:
             return self._stt
+        self._wait_load(self._stt_load, "модель распознавания")
+        try:
+            return self._load_stt()
+        finally:
+            self._stt_load.release()
+
+    def _load_stt(self) -> STTProvider:
+        if self._stt is not None:
+            return self._stt
+        model = self._env.get("DDS_STT_MODEL", "")
+        if not model:
+            raise VoiceUnavailable("STT не настроен (DDS_STT_MODEL)")
+        if self._stt_down():
+            raise VoiceUnavailable(self._stt_error or "STT недоступен")
+        try:
+            from ..voice.stt.faster_whisper_provider import FasterWhisperSTT
+
+            self._stt = FasterWhisperSTT(model, max_seconds=self.max_audio_seconds)
+        except Exception as exc:
+            self._stt_error = f"STT не загрузился: {exc}"
+            self._stt_retry.failed()
+            log.warning("%s; повтор через %g с", self._stt_error, self._stt_retry.delay_s)
+            raise VoiceUnavailable(self._stt_error) from exc
+        self._stt_error = None
+        self._stt_retry.succeeded()
+        return self._stt
 
     def _get_tts(self, gender: str) -> tuple[TTSProvider, str]:
         if gender not in _ENV_SUFFIX:
             raise ValueError(f"неизвестный голос {gender!r}")
-        with self._lock:
+        if gender in self._tts:
+            return self._tts[gender]
+        if not self._env.get(f"DDS_TTS_VOICE_PATH{_ENV_SUFFIX[gender]}") and "female" in self._tts:
+            return self._tts["female"]  # мужской голос не настроен — женский, без блокировки
+        self._wait_load(self._tts_load, "голос")
+        try:
             return self._load_tts(gender)
+        finally:
+            self._tts_load.release()
 
     def _load_tts(self, gender: str) -> tuple[TTSProvider, str]:
         if gender in self._tts:
             return self._tts[gender]
         suffix = _ENV_SUFFIX[gender]
         path = self._env.get(f"DDS_TTS_VOICE_PATH{suffix}", "")
-        if not path or gender in self._tts_error:
+        if not path or self._tts_down(gender):
             if gender != "female":
                 return self._load_tts("female")  # нет мужского голоса — говорим женским
             raise VoiceUnavailable(
@@ -164,12 +287,19 @@ class VoiceService:
             p = Path(path)
             if not p.exists():
                 _download(
-                    self._env.get(f"DDS_TTS_VOICE_URL{suffix}") or DEFAULT_VOICE_URLS[gender], p
+                    self._env.get(f"DDS_TTS_VOICE_URL{suffix}") or DEFAULT_VOICE_URLS[gender],
+                    p,
+                    timeout_s=self.download_timeout_s,
+                    clock=self._clock,
                 )
             self._tts[gender] = (PiperTTS(str(p), voice_name=p.stem), p.stem)
+            self._tts_error.pop(gender, None)
+            self._tts_retry[gender].succeeded()
         except Exception as exc:
             self._tts_error[gender] = f"TTS ({gender}) не загрузился: {exc}"
-            log.warning(self._tts_error[gender])
+            retry = self._tts_retry[gender]
+            retry.failed()
+            log.warning("%s; повтор через %g с", self._tts_error[gender], retry.delay_s)
             if gender != "female":
                 return self._load_tts("female")
             raise VoiceUnavailable(self._tts_error[gender]) from exc
@@ -180,14 +310,19 @@ class VoiceService:
     def transcribe(self, audio: bytes, hints: list[str] | None = None) -> dict[str, Any]:
         if not audio:
             raise ValueError("пустая запись")
-        if len(audio) > MAX_AUDIO_BYTES:
-            raise ValueError("запись слишком длинная")
+        if len(audio) > self.max_audio_bytes:
+            raise AudioTooLarge(self.max_audio_bytes)
         stt = self._get_stt()
-        with self._stt_run:
-            try:
-                segments = stt.transcribe(audio, hints=tuple(hints or ()))
-            except Exception as exc:
-                raise VoiceUnavailable(f"распознавание не удалось: {exc}") from exc
+        if not self._stt_run.acquire(timeout=self.lock_timeout_s):
+            raise VoiceBusy("сервер распознаёт другую запись — повторите через несколько секунд")
+        try:
+            segments = stt.transcribe(audio, hints=tuple(clean_hints(hints or ())))
+        except AudioTooLong:
+            raise
+        except Exception as exc:
+            raise VoiceUnavailable(f"распознавание не удалось: {exc}") from exc
+        finally:
+            self._stt_run.release()
         text = " ".join(s.text for s in segments if s.text).strip()
         conf = [s.confidence for s in segments if s.confidence is not None]
         return {
@@ -201,13 +336,14 @@ class VoiceService:
         if not text:
             raise ValueError("пустой текст")
         tts, voice_name = self._get_tts(voice)
-        with self._tts_run:
-            try:
-                pcm = tts.synthesize(
-                    normalize_for_tts(text), voice=voice_name, intonation=intonation
-                )
-            except Exception as exc:
-                raise VoiceUnavailable(f"синтез не удался: {exc}") from exc
+        if not self._tts_run.acquire(timeout=self.lock_timeout_s):
+            raise VoiceBusy("сервер озвучивает другую фразу — повторите через несколько секунд")
+        try:
+            pcm = tts.synthesize(normalize_for_tts(text), voice=voice_name, intonation=intonation)
+        except Exception as exc:
+            raise VoiceUnavailable(f"синтез не удался: {exc}") from exc
+        finally:
+            self._tts_run.release()
         return pcm_to_wav(pcm, int(getattr(tts, "sample_rate", 22050)))
 
 

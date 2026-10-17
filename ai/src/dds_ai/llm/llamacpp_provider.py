@@ -11,6 +11,11 @@ llama.cpp этим не прерывается. Поэтому у адаптер
 как `timeout`. Обработку промпта до первого токена так прервать нельзя. Этот отрезок
 ограничен длиной промпта: история в нём ограничена (`history_turns`).
 
+Очередь. Один контекст llama.cpp обслуживает один вызов, остальные ждут блокировку. Ожидание
+входит в срок вызова и не дольше `lock_timeout_s` (`DDS_LLM_LOCK_TIMEOUT_S`, по умолчанию 20 с);
+не дождались — `LLMBusy`, а не зависший запрос HTTP. Дождались, но срок вызова уже вышел
+в очереди — `TimeoutError`: модель свободна, просто не успели.
+
 Принудительный токен конца через обработчик логитов не годится: с грамматикой JSON
 llama.cpp аварийно завершает процесс, если грамматика не допускает конец
 («Unexpected empty grammar stack»). Это найдено дымовым прогоном на крошечной модели
@@ -39,8 +44,19 @@ from pathlib import Path
 from typing import Any
 
 from ..contracts.common import ModelRef
+from .errors import LLMBusy
 
 _CHUNK = 1 << 20
+DEFAULT_LOCK_TIMEOUT_S = 20.0
+
+
+def _lock_timeout_from_env() -> float:
+    try:
+        value = float(os.environ.get("DDS_LLM_LOCK_TIMEOUT_S") or DEFAULT_LOCK_TIMEOUT_S)
+    except ValueError:
+        return DEFAULT_LOCK_TIMEOUT_S
+    return value if value > 0 else DEFAULT_LOCK_TIMEOUT_S
+
 
 REPLY_SCHEMA = {
     "type": "object",
@@ -69,6 +85,7 @@ class LlamaCppProvider:
         model_name: str | None = None,
         model_version: str | None = None,
         timeout_s: float = 8.0,
+        lock_timeout_s: float | None = None,
         n_ctx: int = 2048,
         n_threads: int | None = None,
         temperature: float = 0.0,
@@ -101,12 +118,16 @@ class LlamaCppProvider:
         self._lock = threading.Lock()  # один контекст llama.cpp не допускает параллельных вызовов
         self._schema_grammars: dict[str, Any] = {}
         self.timeout_s = timeout_s
+        self.lock_timeout_s = lock_timeout_s or _lock_timeout_from_env()
         self.temperature = temperature
         self.seed = seed
         self.chat = chat
         self.model_ref = ModelRef(
             component="llm",
-            model_name=model_name or path.stem,
+            # в стенде файл зовётся model.gguf — имя из метаданных GGUF понятнее, чем «model»
+            model_name=model_name
+            or (getattr(self._llm, "metadata", None) or {}).get("general.name")
+            or path.stem,
             model_version=model_version or file_fingerprint(path),
         )
 
@@ -134,15 +155,25 @@ class LlamaCppProvider:
         )
 
     def _generate(self, prompt: str, *, max_tokens: int, grammar: Any, timeout_s: float) -> str:
-        with self._lock:
+        # срок считается от вызова: ожидание в очереди входит в него
+        deadline = time.monotonic() + timeout_s
+        if not self._lock.acquire(timeout=min(self.lock_timeout_s, timeout_s)):
+            raise LLMBusy(f"llama.cpp занята другим запросом дольше {self.lock_timeout_s:g} с")
+        try:
+            if time.monotonic() >= deadline:
+                # дождались блокировки, но срок запроса вышел: генерацию не запускаем. Это
+                # тайм-аут запроса, а не «занята» — как и срок, истёкший посреди генерации
+                raise TimeoutError(f"llama.cpp: срок запроса ({timeout_s:g} с) вышел в очереди")
             return self._generate_locked(
-                prompt, max_tokens=max_tokens, grammar=grammar, timeout_s=timeout_s
+                prompt, max_tokens=max_tokens, grammar=grammar, deadline=deadline
             )
+        finally:
+            self._lock.release()
 
     def _generate_locked(
-        self, prompt: str, *, max_tokens: int, grammar: Any, timeout_s: float
+        self, prompt: str, *, max_tokens: int, grammar: Any, deadline: float
     ) -> str:
-        deadline = time.monotonic() + timeout_s
+        timeout_s = round(deadline - time.monotonic(), 1)
         kwargs: dict[str, Any] = {
             "max_tokens": max_tokens,
             "temperature": self.temperature,
