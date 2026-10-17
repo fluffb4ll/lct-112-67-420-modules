@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { initialSttMode, serverTranscript, sttFallback, sttHints } from './sttMode';
+import { initialSttMode, serverTranscript, sttFallback, sttHints, SttState } from './sttMode';
 
 describe('initialSttMode', () => {
   it('сервер в приоритете, затем браузер, затем текст', () => {
@@ -52,5 +52,31 @@ describe('sttHints', () => {
   it('пустые поля пропускаются', () => {
     expect(sttHints({ address: { street: 'Кировоградская', house: '' } })).toEqual(['Кировоградская']);
     expect(sttHints(undefined)).toEqual([]);
+  });
+});
+
+describe('SttState', () => {
+  it('сбой сервера — откат до конца звонка, в следующем звонке снова сервер', () => {
+    const stt = new SttState(() => true);
+    stt.serverChecked(true);
+    expect(stt.startCall()).toBe('server');
+    expect(stt.fail(null).mode).toBe('browser');
+    expect(stt.mode).toBe('browser');
+    expect(stt.startCall()).toBe('server');
+  });
+
+  it('без браузерного распознавания — откат на текст, следующий звонок снова на сервер', () => {
+    const stt = new SttState(() => false);
+    stt.serverChecked(true);
+    stt.startCall();
+    expect(stt.fail(null).mode).toBe('text');
+    expect(stt.startCall()).toBe('server');
+  });
+
+  it('сервер недоступен с начала — браузер или текст во всех звонках', () => {
+    expect(new SttState(() => true).startCall()).toBe('browser');
+    const stt = new SttState(() => false);
+    stt.serverChecked(false);
+    expect(stt.startCall()).toBe('text');
   });
 });

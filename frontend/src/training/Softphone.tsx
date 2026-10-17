@@ -6,7 +6,7 @@ import { useRun } from '../store/training';
 import { cx } from '../ui/cx';
 import { phoneLabel, useSoftphone } from './softphoneStore';
 import { busy, ringback } from './sounds';
-import { initialSttMode, serverTranscript, sttFallback, sttHints, type SttMode } from './sttMode';
+import { serverTranscript, SttState, sttHints } from './sttMode';
 import { listen, recognize, recordMic, serverSttAvailable, speak, sttAvailable, stopSpeaking, type Listener, type Recording } from './voice';
 
 /*
@@ -29,7 +29,7 @@ export function Softphone() {
   const [sttNote, setSttNote] = useState('');
   // server — запись распознаёт сервер, потоковый Web Speech не нужен, текст появится после доклада;
   // browser — Web Speech по ходу доклада; text — распознавать нечем
-  const sttMode = useRef<SttMode>(initialSttMode(false, sttAvailable()));
+  const [stt] = useState(() => new SttState(sttAvailable));
   const [serverSttOn, setServerSttOn] = useState(false);
   // актуальный textMode для колбэков, переживших рендер (таймер звонка)
   const textModeRef = useRef(textMode);
@@ -48,7 +48,7 @@ export function Softphone() {
   useEffect(() => {
     alive.current = true;
     void serverSttAvailable().then((ok) => {
-      if (ok) sttMode.current = 'server';
+      stt.serverChecked(ok);
       if (ok && alive.current) {
         setServerSttOn(true);
         setTextMode(false);
@@ -61,7 +61,7 @@ export function Softphone() {
       void recording.current?.stop();
       stopSpeaking();
     };
-  }, []);
+  }, [stt]); // stt не меняется — эффект один раз при монтировании
 
   const contacts = run.service.contacts;
 
@@ -80,8 +80,10 @@ export function Softphone() {
     setHeard('');
     setTyped('');
     setSttNote('');
-    // ввод текстом в прошлом звонке (нет микрофона, отказ распознавания) не переносится на новый
-    textModeRef.current = sttMode.current === 'text';
+    // ввод текстом и откат с сервера в прошлом звонке (нет микрофона, сбой распознавания) не переносятся на новый
+    const mode = stt.startCall();
+    setServerSttOn(mode === 'server');
+    textModeRef.current = mode === 'text';
     setTextMode(textModeRef.current);
     if (!peer) {
       ringback(1);
@@ -108,8 +110,8 @@ export function Softphone() {
           return;
         }
         recording.current = rec;
-        if (!recording.current && sttMode.current === 'server') setTextMode(true); // нет доступа к микрофону
-        else if (!textModeRef.current && sttMode.current === 'browser') startListening();
+        if (!recording.current && stt.mode === 'server') setTextMode(true); // нет доступа к микрофону
+        else if (!textModeRef.current && stt.mode === 'browser') startListening();
       }, 4200),
     );
   }
@@ -134,7 +136,7 @@ export function Softphone() {
     const rec = await recording.current?.stop();
     recording.current = null;
     let transcript = (textMode ? typed : heard).trim();
-    if (!textMode && sttMode.current === 'server') {
+    if (!textMode && stt.mode === 'server') {
       if (rec?.blob) setRecognizing(true);
       const hints = sttHints(run.current?.scenario.incident);
       const text = await serverTranscript(rec?.blob, (blob) => recognize(blob, hints));
@@ -142,15 +144,13 @@ export function Softphone() {
       if (!live()) return; // звонок сброшен, пока распознавали
       if (!text) {
         // распознать не вышло — звонок продолжается: доклад повторяется голосом через браузер или вводится текстом
-        const next = sttFallback(text, sttAvailable());
+        const next = stt.fail(text);
         setSttNote(next.note);
         if (next.mode === 'browser') {
-          sttMode.current = 'browser';
           setServerSttOn(false);
           setHeard('');
           startListening();
         } else {
-          if (next.mode === 'text') sttMode.current = 'text';
           setTextMode(true);
         }
         return;
