@@ -68,8 +68,32 @@ SPOILERS = (
     r"откаж",
     r"отказыва",
 )
-_SPOILER_RE = re.compile(r"(?<![а-яa-z0-9])(?:" + "|".join(SPOILERS) + ")")
-HIDDEN_COMPLICATIONS = frozenset({"zone", "duplicate", "refusal"})
+# «progress» тоже скрыт (промпт и фронт: особенность в title/description не называется):
+# обучающийся сам доводит карточку до «Работы завершены». Выдаёт его ход работ службы —
+# выезд, прибытие, завершение; просьба заявителя «устранить» — нет, «устранено» — да.
+PROGRESS_SPOILERS = (
+    r"ддс",
+    r"выезд",
+    r"выех",
+    r"прибы",
+    r"заверш",
+    r"устранен",
+    r"бригад",
+    r"ход работ",
+)
+
+
+def _spoiler_re(parts: tuple[str, ...]) -> re.Pattern[str]:
+    return re.compile(r"(?<![а-яa-z0-9])(?:" + "|".join(parts) + ")")
+
+
+_SPOILER_RES = {
+    "zone": _spoiler_re(SPOILERS),
+    "duplicate": _spoiler_re(SPOILERS),
+    "refusal": _spoiler_re(SPOILERS),
+    "progress": _spoiler_re(PROGRESS_SPOILERS),
+}
+HIDDEN_COMPLICATIONS = frozenset(_SPOILER_RES)
 
 # сколько слов, которых нет ни в черновике, ни в адресе, нужно, чтобы текст не считался повтором
 ECHO_MIN_NEW_WORDS = 2
@@ -159,14 +183,23 @@ def _words(text: str) -> list[str]:
     return out
 
 
-def _spoils(text: str) -> bool:
-    return _SPOILER_RE.search(" ".join(_words(text))) is not None
+def _spoils(text: str, complication: str) -> bool:
+    spoiler = _SPOILER_RES.get(complication)
+    return spoiler is not None and spoiler.search(" ".join(_words(text))) is not None
 
 
 def _same_root(a: str, b: str) -> bool:
-    # короткие слова («в», «не», «дом») — только целиком, иначе все слова на «в» стали бы старыми
-    n = min(5, len(a), len(b))
-    return a[:n] == b[:n] if n >= 4 else a == b
+    """Одно слово в другой форме: общее начало из 5 букв или из 4, если дальше только окончание.
+
+    Короткие слова («в», «не», «дом») — только целиком, иначе все слова на «в» стали бы старыми.
+    Окончание — до двух букв сверх общего начала у более короткого слова: «лифтах» = «лифте»,
+    «лифтом» = «лифта»; «переход» ≠ «перекрыт».
+    """
+    if a == b:
+        return True
+    n = min(len(a), len(b))
+    p = next((i for i in range(n) if a[i] != b[i]), n)
+    return p >= 5 or (p >= 4 and p >= n - 2)
 
 
 def _new_words(text: str, *known: str) -> int:
@@ -225,7 +258,6 @@ def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str,
     applied: list[str] = []
     rejected: list[str] = []
     if out is not None:
-        hidden = complication in HIDDEN_COMPLICATIONS
         address = _address(draft)
 
         def reject(field: str, reason: str) -> None:
@@ -238,7 +270,7 @@ def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str,
                 reject(field, f"длина вне {lo}–{hi} знаков")
             elif _echoes(text, draft_text, address):
                 reject(field, "повтор шаблона")
-            elif hidden and _spoils(text):
+            elif _spoils(text, complication):
                 reject(field, "выдаёт скрытое осложнение")
             else:
                 return text

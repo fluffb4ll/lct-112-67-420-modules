@@ -209,14 +209,45 @@ def test_short_draft_words_do_not_make_new_words_old():
     assert "title" in out["applied"]
 
 
-def test_spoilers_checked_only_for_hidden_complications():
+def test_spoilers_depend_on_complication():
     text = "Застряли в лифте. Соседи вызвали аварийную организацию, ждут на площадке."
     progress = compose_scenario(
         {"scenario": draft("progress"), "complication": "progress"}, answer(description=text)
     )
     zone = compose_scenario({"scenario": draft(), "complication": "zone"}, answer(description=text))
+    none = compose_scenario(
+        {"scenario": draft("none"), "complication": "none"}, answer(description=text)
+    )
     assert "description" in progress["applied"]
     assert "description" in zone["rejected"]
+    assert "description" in none["applied"]
+
+
+@pytest.mark.parametrize(
+    ("title", "spoils"),
+    [
+        ("Бригада устранила застревание у Кировоградской", True),
+        ("Лифт застрял, мастер выехал и прибыл на место", True),
+        ("Неисправность устранена, работы завершены", True),
+        ("Мужчина застрял в кабине, просит поскорее устранить", False),
+    ],
+)
+def test_progress_title_must_not_reveal_work_stages(title, spoils):
+    out = compose_scenario(
+        {"scenario": draft("progress"), "complication": "progress"}, answer(title=title)
+    )
+    assert ("title" in out["rejected"]) is spoils
+    assert ("title" in out["applied"]) is not spoils
+
+
+def test_word_forms_of_draft_words_are_not_new():
+    # «лифтах» — «лифте» из черновика в другой форме: нового слова одно («мужчина»), это повтор
+    d = draft("progress")
+    d["title"] = "Застревание в лифте"
+    out = compose_scenario(
+        {"scenario": d, "complication": "progress"}, answer(title="Застревание: мужчина в лифтах")
+    )
+    assert "title" in out["rejected"] and "title" not in out["applied"]
 
 
 def test_prompt_does_not_ask_to_rewrite_template_text():
