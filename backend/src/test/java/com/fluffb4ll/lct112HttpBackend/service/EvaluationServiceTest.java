@@ -24,6 +24,7 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import javax.naming.AuthenticationException;
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -281,7 +282,7 @@ class EvaluationServiceTest {
         assertEquals(AiEvaluationStatus.PENDING, EvaluationDto.fromEntity(evaluation).aiStatus());
 
         // Запуск оборвался (рестарт посреди вызова ИИ) — «ИИ оценивает…» не должно висеть вечно
-        evaluation.setUpdatedAt(OffsetDateTime.now().minusMinutes(30));
+        evaluation.setUpdatedAt(OffsetDateTime.now().minus(EvaluationDto.STALE_PENDING_AFTER).minusMinutes(1));
         assertEquals(AiEvaluationStatus.UNAVAILABLE, EvaluationDto.fromEntity(evaluation).aiStatus());
     }
 
@@ -352,7 +353,7 @@ class EvaluationServiceTest {
         // Прежний запуск оборвался (рестарт) — его PENDING не должен навсегда запретить пересчёт
         when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
         EvaluationEntity stale = runningEvaluation();
-        stale.setUpdatedAt(OffsetDateTime.now().minusMinutes(30));
+        stale.setUpdatedAt(OffsetDateTime.now().minus(EvaluationDto.STALE_PENDING_AFTER).minusMinutes(1));
         when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.of(stale));
         when(evaluationRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
         when(aiEvaluationClient.requestEvaluation(any())).thenReturn(Optional.of(aiResponse(64)));
@@ -361,6 +362,30 @@ class EvaluationServiceTest {
 
         assertEquals(AiEvaluationStatus.OK, result.aiStatus());
         assertEquals(64, result.aiScore());
+    }
+
+    @Test
+    void staleThresholdCoversWaitInFullAiQueue() {
+        // Ручной запуск в хвосте полной очереди: ceil(50 / 4) волн чужих вызовов + свой, каждый до 5 + 90 с
+        Duration worstQueuedRun = Duration.ofMillis(5_000 + 90_000).multipliedBy(50 / 4 + 1 + 1);
+        assertTrue(EvaluationDto.STALE_PENDING_AFTER.compareTo(worstQueuedRun) > 0,
+                () -> "STALE_PENDING_AFTER=" + EvaluationDto.STALE_PENDING_AFTER + " <= " + worstQueuedRun);
+    }
+
+    @Test
+    void manualRunWaitingInQueueForTenMinutesStillBlocksSecondRun() throws Exception {
+        // PENDING поставлен до очереди; через 10 мин задача ещё может ждать потока — это не обрыв
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        EvaluationEntity queued = runningEvaluation();
+        queued.setUpdatedAt(OffsetDateTime.now().minusMinutes(10));
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.of(queued));
+
+        EvaluationDto result = service.evaluateWithAi(token, card.getId());
+
+        assertEquals(AiEvaluationStatus.PENDING, result.aiStatus());
+        assertEquals(AiEvaluationStatus.PENDING, EvaluationDto.fromEntity(queued).aiStatus());
+        verify(aiEvaluationClient, never()).requestEvaluation(any());
+        verify(evaluationRepository, never()).saveAndFlush(any());
     }
 
     @Test

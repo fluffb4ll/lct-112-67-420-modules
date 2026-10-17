@@ -43,6 +43,7 @@ class OperatorCardServiceTest {
     private OperatorCardService service;
     private SubmitOperatorCardRequestDto request;
     private ScenarioEntity scenario;
+    private SessionEntity session;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -69,7 +70,7 @@ class OperatorCardServiceTest {
         when(authService.verifyAuthToken(token, null)).thenReturn(new UserEntity("student", null, "Student", role));
 
         scenario = ScenarioEntity.builder().id(UUID.randomUUID()).timeLimitSeconds(180).status(ScenarioStatus.APPROVED).build();
-        SessionEntity session = SessionEntity.builder().id(UUID.randomUUID()).startedAt(OffsetDateTime.now())
+        session = SessionEntity.builder().id(UUID.randomUUID()).startedAt(OffsetDateTime.now())
                 .scenarioIds(new UUID[]{scenario.getId()}).build();
         when(sessionRepository.findById(session.getId())).thenReturn(java.util.Optional.of(session));
         when(scenarioRepository.findById(scenario.getId())).thenReturn(java.util.Optional.of(scenario));
@@ -152,6 +153,24 @@ class OperatorCardServiceTest {
         OperatorCardException e = assertThrows(OperatorCardException.class, () -> service.submitCard(token, foreignRequest));
 
         assertTrue(e.getMessage().contains("not part of this session"));
+        verify(operatorCardRepository, never()).save(any());
+    }
+
+    @Test
+    void sessionWithoutExplicitScenariosAcceptsAnyApprovedScenario() throws Exception {
+        // Пустой список у занятия — «все утверждённые»: так сценарии выдаёт поток карточек
+        session.setScenarioIds(new UUID[0]);
+
+        assertDoesNotThrow(() -> service.submitCard(token, request));
+        verify(operatorCardRepository).save(any());
+    }
+
+    @Test
+    void sessionWithoutExplicitScenariosStillRejectsArchivedScenario() {
+        session.setScenarioIds(new UUID[0]);
+        scenario.setStatus(ScenarioStatus.ARCHIVED);
+
+        assertThrows(OperatorCardException.class, () -> service.submitCard(token, request));
         verify(operatorCardRepository, never()).save(any());
     }
 

@@ -4,6 +4,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import java.time.Duration;
+
 /**
  * Отдельный пул для фоновой оценки карточек ИИ.
  * Языковая модель отвечает десятки секунд: в общем ForkJoinPool такие задачи занимали бы
@@ -15,13 +17,29 @@ public class AiEvaluationExecutorConfig {
 
     public static final String AI_EVALUATION_EXECUTOR = "aiEvaluationExecutor";
 
+    public static final int POOL_SIZE = 4;
+    public static final int QUEUE_CAPACITY = 50;
+
+    /**
+     * Самый долгий вызов ИИ: app.ai.connect-timeout-ms + app.ai.read-timeout-ms из application.yaml (5 с + 90 с).
+     * Таймауты переопределяются через env, этот бюджет — нет: поднимая их, поднимите и его.
+     */
+    public static final Duration AI_CALL_BUDGET = Duration.ofSeconds(95);
+
+    /**
+     * Сколько может пройти от постановки задачи в полную очередь до конца её вызова ИИ:
+     * перед ней ceil(очередь / потоки) «волн» по одному вызову на поток, плюс её собственный вызов.
+     */
+    public static final Duration MAX_QUEUED_RUN_DURATION =
+            AI_CALL_BUDGET.multipliedBy((QUEUE_CAPACITY + POOL_SIZE - 1) / POOL_SIZE + 1);
+
     @Bean(name = AI_EVALUATION_EXECUTOR)
     public ThreadPoolTaskExecutor aiEvaluationExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         // core = max: пул растёт сверх core только при полной очереди, поэтому сразу держим все 4 потока
-        executor.setCorePoolSize(4);
-        executor.setMaxPoolSize(4);
-        executor.setQueueCapacity(50);
+        executor.setCorePoolSize(POOL_SIZE);
+        executor.setMaxPoolSize(POOL_SIZE);
+        executor.setQueueCapacity(QUEUE_CAPACITY);
         executor.setThreadNamePrefix("ai-eval-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);

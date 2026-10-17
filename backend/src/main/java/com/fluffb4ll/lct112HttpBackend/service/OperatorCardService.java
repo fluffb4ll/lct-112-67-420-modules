@@ -95,7 +95,11 @@ public class OperatorCardService {
         ScenarioEntity scenario = scenarioRepository.findById(request.scenarioId())
                 .orElseThrow(() -> new OperatorCardException("Scenario not found"));
 
-        if (session.getScenarioIds() != null && !Arrays.asList(session.getScenarioIds()).contains(scenario.getId())) {
+        // Пустой список сценариев у занятия — «все утверждённые» (так их выдаёт поток карточек),
+        // принадлежность проверяем только при явном списке
+        UUID[] sessionScenarioIds = session.getScenarioIds();
+        if (sessionScenarioIds != null && sessionScenarioIds.length > 0
+                && !Arrays.asList(sessionScenarioIds).contains(scenario.getId())) {
             throw new OperatorCardException("Scenario is not part of this session");
         }
         // Сдача только по утверждённому сценарию. Карточку, выданную до архивации, тоже не принимаем:

@@ -1,5 +1,6 @@
 package com.fluffb4ll.lct112HttpBackend.dto.response;
 
+import com.fluffb4ll.lct112HttpBackend.config.AiEvaluationExecutorConfig;
 import com.fluffb4ll.lct112HttpBackend.entity.EvaluationEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.AiEvaluationStatus;
 
@@ -26,9 +27,14 @@ public record EvaluationDto(
 ) {
     /**
      * PENDING дольше этого срока — запуск оборвался (рестарт бэкенда посреди вызова ИИ).
-     * С запасом больше таймаута чтения ИИ (app.ai.read-timeout-ms, 90 с).
+     * Ручной перезапуск ставит PENDING до постановки в пул, и задача может простоять в полной очереди
+     * (автооценка захватывает строку уже в потоке пула). Поэтому порог — не таймаут одного вызова,
+     * а худший путь через очередь ({@link AiEvaluationExecutorConfig#MAX_QUEUED_RUN_DURATION}, ≈22 мин)
+     * с запасом: раньше живой запуск в очереди считался бы зависшим, и второй захват запустил бы
+     * второй вызов ИИ на ту же карточку.
      */
-    static final Duration STALE_PENDING_AFTER = Duration.ofMinutes(5);
+    public static final Duration STALE_PENDING_AFTER =
+            AiEvaluationExecutorConfig.MAX_QUEUED_RUN_DURATION.plus(Duration.ofMinutes(3));
 
     public static EvaluationDto fromEntity(EvaluationEntity entity) {
         if (entity == null) {
