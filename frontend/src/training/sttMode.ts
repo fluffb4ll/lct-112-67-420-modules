@@ -1,3 +1,5 @@
+import type { Address, IncidentType } from '../domain/types';
+
 /*
  * Чем распознаётся доклад по софтфону. Порядок: сервер (запись → faster-whisper), браузер (Web Speech),
  * ввод текстом. Чистая логика без React и window — её проверяют тесты.
@@ -29,4 +31,13 @@ export function sttFallback(result: string | null, browserOk: boolean): { mode: 
  */
 export async function serverTranscript(blob: Blob | null | undefined, recognize: (blob: Blob) => Promise<string | null>): Promise<string | null> {
   return blob ? recognize(blob) : '';
+}
+
+/**
+ * Подсказки серверному распознаванию (POST /ai/v1/stt?hints=): улица, дом и тип происшествия
+ * («Застревание в лифте») — так whisper верно слышит «застревание», «корпус». Общие слова
+ * («улица», «дом») не добавляем: whisper вставляет их в расшифровку.
+ */
+export function sttHints(incident: { address?: Pick<Address, 'street' | 'house'>; type?: Pick<IncidentType, 'finalType'> } | undefined): string[] {
+  return [incident?.address?.street, incident?.address?.house, incident?.type?.finalType].filter((x): x is string => !!x);
 }

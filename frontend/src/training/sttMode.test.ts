@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { initialSttMode, serverTranscript, sttFallback } from './sttMode';
+import { initialSttMode, serverTranscript, sttFallback, sttHints } from './sttMode';
 
 describe('initialSttMode', () => {
   it('сервер в приоритете, затем браузер, затем текст', () => {
@@ -37,5 +37,20 @@ describe('serverTranscript', () => {
     const blob = new Blob(['x']);
     expect(await serverTranscript(blob, async () => 'Кировоградская 22')).toBe('Кировоградская 22');
     expect(await serverTranscript(blob, async () => null)).toBeNull();
+  });
+});
+
+describe('sttHints', () => {
+  it('улица, дом и тип происшествия — whisper верно слышит «застревание»', () => {
+    expect(sttHints({ address: { street: 'Кировоградская', house: '22' }, type: { finalType: 'Застревание в лифте' } })).toEqual([
+      'Кировоградская',
+      '22',
+      'Застревание в лифте',
+    ]);
+  });
+
+  it('пустые поля пропускаются', () => {
+    expect(sttHints({ address: { street: 'Кировоградская', house: '' } })).toEqual(['Кировоградская']);
+    expect(sttHints(undefined)).toEqual([]);
   });
 });
