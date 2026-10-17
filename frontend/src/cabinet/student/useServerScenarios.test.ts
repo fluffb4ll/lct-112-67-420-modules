@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { getDb } from '../../api/db';
 import { toBody, type BackendStatus, type ScenarioDetails } from '../../api/scenarios';
 import { SEED_SCENARIOS } from '../../data/scenarios';
-import { allScenarios, useServerScenarioStore } from '../../store/serverScenarios';
+import { allScenarios, setLessonScenario, useServerScenarioStore } from '../../store/serverScenarios';
 import { fetchGroupScenarios, type GroupScenariosApi } from './serverScenarios';
 import { refreshServerScenarios } from './useServerScenarios';
 
@@ -60,5 +60,13 @@ describe('refreshServerScenarios', () => {
     const before = useServerScenarioStore.getState();
     await refreshServerScenarios('g2', () => true, async () => [{ ...seed, id: 'srv-late' }]);
     expect(useServerScenarioStore.getState()).toBe(before);
+  });
+
+  it('сценарий карточки серверного занятия — в отдельном сторе, обновление набора группы его не стирает', async () => {
+    const localBefore = getDb().scenarios.length;
+    setLessonScenario({ ...seed, id: 'srv-lesson' });
+    await refreshServerScenarios('g1', undefined, async () => []);
+    expect(allScenarios().find((s) => s.id === 'srv-lesson')?.title).toBe(seed.title);
+    expect(getDb().scenarios.length).toBe(localBefore);
   });
 });

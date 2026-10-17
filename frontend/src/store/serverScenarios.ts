@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { create } from 'zustand';
 import { getDb, useDb } from '../api/db';
 import type { Scenario } from '../domain/types';
@@ -14,6 +15,8 @@ const KEY = 'dds-trainer-server-scenarios-v1';
 interface ServerScenarios {
   groupId: string | null;
   scenarios: Scenario[];
+  /** сценарий карточки серверного занятия, открытой последней (ServerLesson) */
+  lesson?: Scenario | null;
 }
 
 function load(): ServerScenarios {
@@ -28,8 +31,7 @@ function load(): ServerScenarios {
 
 export const useServerScenarioStore = create<ServerScenarios>(load);
 
-export function setServerScenarios(groupId: string, scenarios: Scenario[]) {
-  const next = { groupId, scenarios };
+function save(next: ServerScenarios) {
   useServerScenarioStore.setState(next, true);
   try {
     localStorage.setItem(KEY, JSON.stringify(next));
@@ -37,6 +39,17 @@ export function setServerScenarios(groupId: string, scenarios: Scenario[]) {
     // без localStorage живём в памяти
   }
 }
+
+export function setServerScenarios(groupId: string, scenarios: Scenario[]) {
+  save({ ...useServerScenarioStore.getState(), groupId, scenarios });
+}
+
+/** Карточка серверного занятия: её сценарий заменяет прошлый, набор группы не трогает. */
+export function setLessonScenario(sc: Scenario) {
+  save({ ...useServerScenarioStore.getState(), lesson: sc });
+}
+
+const serverList = (s: ServerScenarios) => (s.lesson ? [s.lesson, ...s.scenarios.filter((x) => x.id !== s.lesson!.id)] : s.scenarios);
 
 /** Локальные сценарии плюс серверные; при совпадении id — серверная версия, она свежее. */
 export function withServerScenarios(local: Scenario[], server: Scenario[]): Scenario[] {
@@ -46,11 +59,12 @@ export function withServerScenarios(local: Scenario[], server: Scenario[]): Scen
 }
 
 /** Все сценарии, доступные тренажёру, — вне React (стор тренировки). */
-export const allScenarios = () => withServerScenarios(getDb().scenarios, useServerScenarioStore.getState().scenarios);
+export const allScenarios = () => withServerScenarios(getDb().scenarios, serverList(useServerScenarioStore.getState()));
 
 /** То же в компоненте: перерисовка при изменении любой из частей. */
 export function useAllScenarios(): Scenario[] {
   const local = useDb((s) => s.db.scenarios);
   const server = useServerScenarioStore((s) => s.scenarios);
-  return withServerScenarios(local, server);
+  const lesson = useServerScenarioStore((s) => s.lesson);
+  return useMemo(() => withServerScenarios(local, serverList({ groupId: null, scenarios: server, lesson })), [local, server, lesson]);
 }

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { mutate } from '../../api/db';
 import { describeError } from '../../api/errors';
 import { fromDetails, getScenario } from '../../api/scenarios';
 import { incomingCards, listSessions, type IncomingCard, type IncomingCardsStream } from '../../api/sessions';
 import { navigate } from '../../app/router';
 import type { User } from '../../domain/types';
+import { setLessonScenario } from '../../store/serverScenarios';
 import { useRun } from '../../store/training';
 import { Badge, Button, Notice, Panel, Table } from '../../ui';
 
@@ -67,13 +67,8 @@ export function ServerLesson({ user, groupId }: { user: User; groupId: string | 
     setBusy(true);
     setErr('');
     try {
-      // сценарий берём с сервера и кладём в локальные данные: на них работает сам эмулятор
-      const sc = fromDetails(await getScenario(card.scenarioId));
-      mutate((d) => {
-        const i = d.scenarios.findIndex((x) => x.id === sc.id);
-        if (i >= 0) d.scenarios[i] = sc;
-        else d.scenarios.unshift(sc);
-      });
+      // сценарий берём с сервера — отдельно от локальных данных (store/serverScenarios), тренажёр найдёт его там
+      setLessonScenario(fromDetails(await getScenario(card.scenarioId)));
       start({
         user,
         sessionId: stream.sessionId,
