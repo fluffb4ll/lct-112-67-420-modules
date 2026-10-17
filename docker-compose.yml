@@ -35,6 +35,8 @@ services:
       DDS_FETCH_LLM: ${DDS_FETCH_LLM:-1}
       DDS_LLM_MODEL_URL: ${DDS_LLM_MODEL_URL:-}
       DDS_LLM_MODEL_PATH: ${DDS_LLM_MODEL_PATH:-/models/llm/model.gguf}
+      DDS_LLM_MODEL_SHA256: ${DDS_LLM_MODEL_SHA256:-}
+      DDS_FETCH_VERIFY: ${DDS_FETCH_VERIFY:-1}
     volumes:
       - ai_models:/models
       - ./ai/docker/fetch-models.sh:/fetch-models.sh:ro
