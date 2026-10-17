@@ -1,3 +1,15 @@
+# Лимиты ИИ-контура (/ai/). Файл подключается в контексте http, поэтому зоны объявлены здесь, вне server.
+# Ключ — кука входа AUTH_TOKEN, а без неё — адрес клиента: так лимит считается на пользователя,
+# а не на весь класс за одним NAT. limit_req срабатывает раньше auth_request, поэтому есть ещё
+# общий лимит на адрес — от перебора случайных кук (каждая такая попытка — запрос к бэкенду).
+map $cookie_AUTH_TOKEN $ai_limit_key {
+    ""      $binary_remote_addr;
+    default $cookie_AUTH_TOKEN;
+}
+limit_req_zone $ai_limit_key       zone=ai_voice:10m   rate=2r/s;
+limit_req_zone $ai_limit_key       zone=ai_compose:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=ai_addr:10m    rate=20r/s;
+
 server {
     listen 80;
     server_name localhost;
@@ -31,15 +43,81 @@ server {
     }
 
     # ИИ-контур: генерация текста сценариев, распознавание и синтез речи (frontend/src/api/ai.ts).
-    # /ai/v1/stt → ${AI_URL}/v1/stt
+    # /ai/v1/stt → ${AI_URL}/v1/stt. Только после входа (auth_request) и только то, что зовёт фронт:
+    # оценка и попытки (/api/v1/ai/…, /v1/attempts/…) нужны лишь бэкенду по внутренней сети.
+    # Без входа — 401, сверх лимита — 429; фронт в обоих случаях откатывается на свой вариант.
     location /ai/ {
-        set $ai "${AI_URL}";
-        rewrite ^/ai/(.*)$ /$1 break;
-        proxy_pass $ai;
+        auth_request /_ai_auth;
+        limit_req_status 429;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_read_timeout 120s;
-        client_max_body_size 20m;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 30s;
+        client_max_body_size 1m;
+
+        # что из голосового тракта есть на сервере — раз за загрузку страницы
+        location = /ai/v1/voice {
+            limit_req zone=ai_addr burst=40 nodelay;
+            limit_req zone=ai_voice burst=10 nodelay;
+            proxy_read_timeout 10s;
+            set $ai "${AI_URL}";
+            rewrite ^/ai/(.*)$ /$1 break;
+            proxy_pass $ai;
+        }
+
+        # синтез реплики звонящего (фронт ждёт 30 с)
+        location = /ai/v1/tts {
+            limit_req zone=ai_addr burst=40 nodelay;
+            limit_req zone=ai_voice burst=10 nodelay;
+            proxy_read_timeout 35s;
+            set $ai "${AI_URL}";
+            rewrite ^/ai/(.*)$ /$1 break;
+            proxy_pass $ai;
+        }
+
+        # распознавание записи доклада: тело — сама запись (фронт ждёт 60 с)
+        location = /ai/v1/stt {
+            limit_req zone=ai_addr burst=40 nodelay;
+            limit_req zone=ai_voice burst=10 nodelay;
+            client_max_body_size 10m;
+            proxy_send_timeout 60s;
+            proxy_read_timeout 65s;
+            set $ai "${AI_URL}";
+            rewrite ^/ai/(.*)$ /$1 break;
+            proxy_pass $ai;
+        }
+
+        # языковая модель переписывает текст сценария — самое тяжёлое (фронт ждёт 90 с)
+        location = /ai/v1/scenarios/compose {
+            limit_req zone=ai_addr burst=40 nodelay;
+            # пачка из ScenarioBank — до 6 сценариев подряд — проходит целиком
+            limit_req zone=ai_compose burst=6 nodelay;
+            proxy_read_timeout 120s;
+            set $ai "${AI_URL}";
+            rewrite ^/ai/(.*)$ /$1 break;
+            proxy_pass $ai;
+        }
+
+        return 404;
+    }
+
+    # Проверка входа для /ai/: подзапрос к бэкенду с той же кукой AUTH_TOKEN, ответ 204 или 401.
+    # Тело (запись для STT) бэкенду не нужно — не передаём.
+    location = /_ai_auth {
+        internal;
+        # подзапрос сверяет Content-Length основного запроса со своим лимитом: без этого запись
+        # больше 1 МБ получала бы 500; сам размер уже проверен в location основного запроса
+        client_max_body_size 10m;
+        set $backend "${BACKEND_URL}";
+        proxy_pass $backend/api/auth/check;
+        proxy_method GET;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Host $host;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
     }
 
     # Проксирование WebSocket соединений (например, /ws/incoming-cards)
