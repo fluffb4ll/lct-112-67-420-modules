@@ -1,0 +1,324 @@
+package com.fluffb4ll.lct112HttpBackend.service;
+
+import com.fluffb4ll.lct112HttpBackend.client.AiEvaluationClient;
+import com.fluffb4ll.lct112HttpBackend.dto.ai.AiEvaluationResponseDto;
+import com.fluffb4ll.lct112HttpBackend.dto.request.EvaluateCardRequestDto;
+import com.fluffb4ll.lct112HttpBackend.dto.response.EvaluationDto;
+import com.fluffb4ll.lct112HttpBackend.entity.EvaluationEntity;
+import com.fluffb4ll.lct112HttpBackend.entity.OperatorCardEntity;
+import com.fluffb4ll.lct112HttpBackend.entity.RoleEntity;
+import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
+import com.fluffb4ll.lct112HttpBackend.model.enums.AiEvaluationStatus;
+import com.fluffb4ll.lct112HttpBackend.model.enums.OperatorCardStatus;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.AiEvaluationUnavailableException;
+import com.fluffb4ll.lct112HttpBackend.repository.EvaluationRepository;
+import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+
+import javax.naming.AuthenticationException;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+
+/** Юнит-тесты оценки карточек: без Spring-контекста и БД, транзакции — заглушка с журналом. */
+class EvaluationServiceTest {
+
+    private final UUID token = UUID.randomUUID();
+
+    private EvaluationRepository evaluationRepository;
+    private OperatorCardRepository operatorCardRepository;
+    private AuthService authService;
+    private AiEvaluationClient aiEvaluationClient;
+    private RecordingTransactionManager transactionManager;
+    private EvaluationService service;
+
+    private UserEntity student;
+    private UserEntity teacher;
+    private OperatorCardEntity card;
+
+    @BeforeEach
+    void setUp() {
+        evaluationRepository = mock(EvaluationRepository.class);
+        operatorCardRepository = mock(OperatorCardRepository.class);
+        authService = mock(AuthService.class);
+        aiEvaluationClient = mock(AiEvaluationClient.class);
+        transactionManager = new RecordingTransactionManager();
+        service = new EvaluationService(
+                evaluationRepository,
+                operatorCardRepository,
+                authService,
+                mock(AuditService.class),
+                aiEvaluationClient,
+                transactionManager
+        );
+
+        student = user("ROLE_STUDENT");
+        teacher = user("ROLE_TEACHER");
+        card = OperatorCardEntity.builder()
+                .id(UUID.randomUUID())
+                .student(student)
+                .status(OperatorCardStatus.SUBMITTED)
+                .build();
+        when(operatorCardRepository.findById(card.getId())).thenReturn(Optional.of(card));
+    }
+
+    // --- п.2: HTTP-вызов ИИ вне транзакции ---
+
+    @Test
+    void aiIsCalledOutsideTransaction() throws Exception {
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.empty());
+        when(evaluationRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(aiEvaluationClient.requestEvaluation(any())).thenAnswer(inv -> {
+            transactionManager.journal.add(transactionManager.active ? "ai-inside-tx" : "ai");
+            return Optional.of(aiResponse(70));
+        });
+
+        service.evaluateWithAi(token, card.getId());
+
+        // Короткая транзакция до вызова ИИ, вызов без транзакции, короткая транзакция после
+        assertEquals(List.of("begin", "commit", "ai", "begin", "commit"), transactionManager.journal);
+    }
+
+    @Test
+    void aiEntryPointsAreNotTransactional() throws Exception {
+        // @Transactional на этих методах снова растянул бы транзакцию на весь вызов ИИ
+        for (Method method : EvaluationService.class.getDeclaredMethods()) {
+            if (List.of("evaluateWithAi", "triggerAiEvaluationById", "evaluateManually", "markAiUnavailable").contains(method.getName())) {
+                assertFalse(method.isAnnotationPresent(jakarta.transaction.Transactional.class), method.getName());
+                assertFalse(method.isAnnotationPresent(org.springframework.transaction.annotation.Transactional.class), method.getName());
+            }
+        }
+        assertFalse(EvaluationService.class.isAnnotationPresent(jakarta.transaction.Transactional.class));
+        assertFalse(EvaluationService.class.isAnnotationPresent(org.springframework.transaction.annotation.Transactional.class));
+    }
+
+    // --- п.3: гонка за unique card_id ---
+
+    @Test
+    void concurrentInsertIsRetriedWithRereadRow() {
+        // Пока шёл вызов ИИ, преподаватель успел создать строку оценки: первая вставка падает на unique card_id
+        EvaluationEntity createdConcurrently = new EvaluationEntity(card);
+        createdConcurrently.setTeacherScore(90);
+        createdConcurrently.setFinalScore(90);
+        when(evaluationRepository.findByCardIdForUpdate(card.getId()))
+                .thenReturn(Optional.empty())              // шаг 1: отметка PENDING
+                .thenReturn(Optional.empty())              // шаг 3, попытка 1
+                .thenReturn(Optional.of(createdConcurrently)); // шаг 3, попытка 2 — перечитанная строка
+        when(evaluationRepository.saveAndFlush(any()))
+                .thenAnswer(inv -> inv.getArgument(0))
+                .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint"))
+                .thenAnswer(inv -> inv.getArgument(0));
+        when(aiEvaluationClient.requestEvaluation(any())).thenReturn(Optional.of(aiResponse(70)));
+
+        service.triggerAiEvaluationById(card.getId());
+
+        assertEquals(70, createdConcurrently.getAiScore());
+        assertEquals(AiEvaluationStatus.OK, createdConcurrently.getAiStatus());
+        // Оценка преподавателя не затёрта
+        assertEquals(90, createdConcurrently.getTeacherScore());
+        assertEquals(90, createdConcurrently.getFinalScore());
+        assertEquals(1, transactionManager.rollbacks);
+        verify(evaluationRepository, times(3)).saveAndFlush(any());
+    }
+
+    @Test
+    void manualEvaluationRetriesConcurrentInsert() throws Exception {
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        EvaluationEntity createdByAi = new EvaluationEntity(card);
+        createdByAi.setAiScore(60);
+        when(evaluationRepository.findByCardIdForUpdate(card.getId()))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(createdByAi));
+        when(evaluationRepository.saveAndFlush(any()))
+                .thenThrow(new DataIntegrityViolationException("duplicate key"))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        EvaluationDto result = service.evaluateManually(token, card.getId(), new EvaluateCardRequestDto(85, "ok"));
+
+        assertEquals(85, result.teacherScore());
+        assertEquals(60, result.aiScore());
+        assertEquals(createdByAi.getId(), result.id());
+    }
+
+    @Test
+    void retryGivesUpAfterLimit() throws Exception {
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.empty());
+        when(evaluationRepository.saveAndFlush(any())).thenThrow(new DataIntegrityViolationException("duplicate key"));
+
+        assertThrows(DataIntegrityViolationException.class,
+                () -> service.evaluateManually(token, card.getId(), new EvaluateCardRequestDto(85, null)));
+        verify(evaluationRepository, times(EvaluationService.MAX_WRITE_ATTEMPTS)).saveAndFlush(any());
+    }
+
+    // --- п.4: сбой ИИ виден преподавателю ---
+
+    @Test
+    void aiFailureIsStoredAsUnavailableAndManualRunGets503() throws Exception {
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        EvaluationEntity existing = new EvaluationEntity(card);
+        existing.setAiScore(55);
+        existing.setAiStatus(AiEvaluationStatus.OK);
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.of(existing));
+        List<AiEvaluationStatus> savedStatuses = recordSavedStatuses();
+        when(aiEvaluationClient.requestEvaluation(any())).thenReturn(Optional.empty());
+
+        AiEvaluationUnavailableException e = assertThrows(AiEvaluationUnavailableException.class,
+                () -> service.evaluateWithAi(token, card.getId()));
+
+        assertEquals(EvaluationService.AI_UNAVAILABLE_MESSAGE, e.getMessage());
+        assertEquals(List.of(AiEvaluationStatus.PENDING, AiEvaluationStatus.UNAVAILABLE), savedStatuses);
+        // Прежняя оценка ИИ не стёрта — помечена только неудачная попытка
+        assertEquals(55, existing.getAiScore());
+        // Статус UNAVAILABLE записан и зафиксирован до ответа 503
+        assertEquals(0, transactionManager.rollbacks);
+    }
+
+    @Test
+    void backgroundAiFailureIsStoredAsUnavailable() {
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.empty());
+        List<AiEvaluationStatus> savedStatuses = recordSavedStatuses();
+        when(aiEvaluationClient.requestEvaluation(any())).thenReturn(Optional.empty());
+
+        assertDoesNotThrow(() -> service.triggerAiEvaluationById(card.getId()));
+
+        assertEquals(List.of(AiEvaluationStatus.PENDING, AiEvaluationStatus.UNAVAILABLE), savedStatuses);
+        assertEquals(OperatorCardStatus.SUBMITTED, card.getStatus());
+    }
+
+    @Test
+    void successfulAiEvaluationIsStoredAsOk() throws Exception {
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.empty());
+        List<AiEvaluationStatus> savedStatuses = recordSavedStatuses();
+        when(aiEvaluationClient.requestEvaluation(any())).thenReturn(Optional.of(aiResponse(77)));
+
+        EvaluationDto result = service.evaluateWithAi(token, card.getId());
+
+        assertEquals(AiEvaluationStatus.OK, result.aiStatus());
+        assertEquals(77, result.aiScore());
+        assertEquals(List.of(AiEvaluationStatus.PENDING, AiEvaluationStatus.OK), savedStatuses);
+        assertEquals(OperatorCardStatus.EVALUATED, card.getStatus());
+    }
+
+    @Test
+    void unsavableAiResultDoesNotLeavePending() {
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.empty());
+        List<AiEvaluationStatus> savedStatuses = new ArrayList<>();
+        when(evaluationRepository.saveAndFlush(any())).thenAnswer(inv -> {
+            EvaluationEntity e = inv.getArgument(0);
+            savedStatuses.add(e.getAiStatus());
+            if (e.getAiStatus() == AiEvaluationStatus.OK) {
+                throw new IllegalStateException("ai_score violates check constraint");
+            }
+            return e;
+        });
+        when(aiEvaluationClient.requestEvaluation(any())).thenReturn(Optional.of(aiResponse(70)));
+
+        assertThrows(IllegalStateException.class, () -> service.triggerAiEvaluationById(card.getId()));
+
+        assertEquals(List.of(AiEvaluationStatus.PENDING, AiEvaluationStatus.OK, AiEvaluationStatus.UNAVAILABLE), savedStatuses);
+    }
+
+    @Test
+    void legacyRowWithAiScoreReportsOk() {
+        EvaluationEntity legacy = new EvaluationEntity(card);
+        legacy.setAiScore(40);
+        assertEquals(AiEvaluationStatus.OK, EvaluationDto.fromEntity(legacy).aiStatus());
+        assertNull(EvaluationDto.fromEntity(new EvaluationEntity(card)).aiStatus());
+    }
+
+    // --- п.5: кто может читать оценку ---
+
+    @Test
+    void foreignStudentCannotReadEvaluation() throws Exception {
+        UserEntity otherStudent = user("ROLE_STUDENT");
+        when(authService.verifyAuthToken(token, null)).thenReturn(otherStudent);
+
+        AuthenticationException e = assertThrows(AuthenticationException.class,
+                () -> service.getEvaluationByCardId(token, card.getId()));
+
+        // «permission» в тексте — иначе фронт сочтёт 401 истёкшей сессией и разлогинит
+        assertTrue(e.getMessage().contains("permission"));
+        verify(evaluationRepository, never()).findByCardId(any());
+    }
+
+    @Test
+    void ownerAndTeacherCanReadEvaluation() throws Exception {
+        EvaluationEntity evaluation = new EvaluationEntity(card);
+        when(evaluationRepository.findByCardId(card.getId())).thenReturn(Optional.of(evaluation));
+
+        when(authService.verifyAuthToken(token, null)).thenReturn(student);
+        assertEquals(evaluation.getId(), service.getEvaluationByCardId(token, card.getId()).id());
+
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        assertEquals(evaluation.getId(), service.getEvaluationByCardId(token, card.getId()).id());
+
+        when(authService.verifyAuthToken(token, null)).thenReturn(user("ROLE_ADMIN"));
+        assertEquals(evaluation.getId(), service.getEvaluationByCardId(token, card.getId()).id());
+    }
+
+    // --- вспомогательное ---
+
+    private List<AiEvaluationStatus> recordSavedStatuses() {
+        List<AiEvaluationStatus> statuses = new ArrayList<>();
+        when(evaluationRepository.saveAndFlush(any())).thenAnswer(inv -> {
+            EvaluationEntity e = inv.getArgument(0);
+            statuses.add(e.getAiStatus());
+            return e;
+        });
+        return statuses;
+    }
+
+    private static AiEvaluationResponseDto aiResponse(int score) {
+        return new AiEvaluationResponseDto(score, Map.of(), Map.of(), "рекомендации", score);
+    }
+
+    private static UserEntity user(String roleName) {
+        RoleEntity role = new RoleEntity(1);
+        role.setName(roleName);
+        return new UserEntity(roleName.toLowerCase(), null, roleName, role);
+    }
+
+    /** Заглушка менеджера транзакций: журнал begin/commit/rollback и признак активной транзакции. */
+    static class RecordingTransactionManager implements PlatformTransactionManager {
+        final List<String> journal = new ArrayList<>();
+        boolean active;
+        int rollbacks;
+
+        @Override
+        public TransactionStatus getTransaction(TransactionDefinition definition) {
+            assertFalse(active, "транзакции не должны вкладываться");
+            active = true;
+            journal.add("begin");
+            return new SimpleTransactionStatus(true);
+        }
+
+        @Override
+        public void commit(TransactionStatus status) {
+            active = false;
+            journal.add("commit");
+        }
+
+        @Override
+        public void rollback(TransactionStatus status) {
+            active = false;
+            rollbacks++;
+            journal.add("rollback");
+        }
+    }
+}

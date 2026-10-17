@@ -95,6 +95,20 @@ python3 build-and-push.py -r docker.io/myusername -t v1.0.0
 
 ---
 
+## 🧪 Тесты бэкенда
+
+Бэкенд собирается и тестируется в Docker — локальная JDK не нужна. Из корня репозитория:
+
+```bash
+docker run --rm -v "$PWD/backend":/app -v lct-m2:/root/.m2 -w /app eclipse-temurin:25-jdk-alpine sh -c 'chmod +x mvnw && ./mvnw -B -q test'
+```
+
+Один класс — `-Dtest=EvaluationServiceTest`. Том `lct-m2` кэширует зависимости Maven между запусками.
+
+Юнит-тесты сервисов (JUnit 5 + Mockito) не поднимают Spring-контекст и не требуют БД. Интеграционный `Lct11267420HttpBackendApplicationTests` (подъём контекста) без переменной `DB_URL` пропускается; чтобы прогнать его, передайте в контейнер `DB_URL`, `DB_USER`, `DB_PASSWORD` и `PEPPER` доступного PostgreSQL.
+
+---
+
 ## 🤖 Что делает ИИ-контур
 
 Всё работает локально, без облачных API.
