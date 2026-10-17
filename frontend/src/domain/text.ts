@@ -17,10 +17,10 @@ export function normalize(text: string): string {
 const FOLD: Record<string, string> = { з: 'с', д: 'т', б: 'п', г: 'к', в: 'ф', ж: 'ш', о: 'а', е: 'и', я: 'и' };
 const FUZZY_MIN_STEM = 5;
 // Короткие корни, которые STT стабильно слышит как другое слово (замерено на faster-whisper
-// small: «в лифте» → «в листе»). Корень засчитан, если слово начинается с такой замены и
-// длиннее её не больше чем на SOUNDALIKE_MAX_TAIL букв (окончание): «листе» — да, «листовка» — нет.
+// small: «в лифте» → «в листе»). Корень засчитан, если слово — замена плюс падежное окончание
+// из SOUNDALIKE_ENDINGS: «листе» — да, «листовка», «листок», «листья» — нет.
 const STT_SOUNDALIKES: Record<string, string[]> = { лифт: ['лист'] };
-const SOUNDALIKE_MAX_TAIL = 3;
+const SOUNDALIKE_ENDINGS = new Set(['', 'а', 'у', 'ом', 'е', 'ы', 'ов', 'ах', 'ам', 'ами']);
 
 const fold = (s: string) => s.replace(/[здбгвжоея]/g, (c) => FOLD[c]);
 
@@ -42,7 +42,7 @@ function levenshtein(a: string, b: string): number {
  */
 function fuzzyHit(words: string[], stem: string): boolean {
   for (const alt of STT_SOUNDALIKES[stem] ?? [])
-    if (words.some((w) => w.startsWith(alt) && w.length - alt.length <= SOUNDALIKE_MAX_TAIL)) return true;
+    if (words.some((w) => w.startsWith(alt) && SOUNDALIKE_ENDINGS.has(w.slice(alt.length)))) return true;
   const n = stem.length;
   if (n < FUZZY_MIN_STEM || !/^\p{L}+$/u.test(stem)) return false;
   const budget = n <= 6 ? 0 : 1;
