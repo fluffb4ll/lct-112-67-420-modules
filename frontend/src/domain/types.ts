@@ -196,7 +196,8 @@ export type Skill =
   | 'literacy'; // грамотность текста
 
 export type ScenarioStatus = 'draft' | 'approved' | 'archived';
-export type ScenarioOrigin = 'dataset' | 'generated' | 'teacher' | 'student';
+/** template — сгенерирован, но текст остался из шаблона классификатора (языковая модель не писала) */
+export type ScenarioOrigin = 'dataset' | 'generated' | 'template' | 'teacher' | 'student';
 
 /** Вводная: информация, которая «поступает» обучающемуся по ходу отработки */
 export interface ScenarioInput {
