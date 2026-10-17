@@ -7,6 +7,8 @@ import com.fluffb4ll.lct112HttpBackend.entity.RoleEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.ScenarioEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.SessionEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
+import com.fluffb4ll.lct112HttpBackend.model.enums.ScenarioStatus;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.OperatorCardException;
 import com.fluffb4ll.lct112HttpBackend.repository.EvaluationRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.ScenarioRepository;
@@ -29,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
-/** Сдача карточки: фоновая оценка ИИ уходит в отдельный пул и только после коммита. */
+/** Сдача карточки: только по утверждённому сценарию занятия; фоновая оценка ИИ — в отдельном пуле после коммита. */
 class OperatorCardServiceTest {
 
     private final UUID token = UUID.randomUUID();
@@ -37,14 +39,16 @@ class OperatorCardServiceTest {
     private OperatorCardRepository operatorCardRepository;
     private EvaluationService evaluationService;
     private Executor aiEvaluationExecutor;
+    private ScenarioRepository scenarioRepository;
     private OperatorCardService service;
     private SubmitOperatorCardRequestDto request;
+    private ScenarioEntity scenario;
 
     @BeforeEach
     void setUp() throws Exception {
         operatorCardRepository = mock(OperatorCardRepository.class);
         SessionRepository sessionRepository = mock(SessionRepository.class);
-        ScenarioRepository scenarioRepository = mock(ScenarioRepository.class);
+        scenarioRepository = mock(ScenarioRepository.class);
         AuthService authService = mock(AuthService.class);
         evaluationService = mock(EvaluationService.class);
         aiEvaluationExecutor = mock(Executor.class);
@@ -64,8 +68,9 @@ class OperatorCardServiceTest {
         role.setName("ROLE_STUDENT");
         when(authService.verifyAuthToken(token, null)).thenReturn(new UserEntity("student", null, "Student", role));
 
-        SessionEntity session = SessionEntity.builder().id(UUID.randomUUID()).startedAt(OffsetDateTime.now()).build();
-        ScenarioEntity scenario = ScenarioEntity.builder().id(UUID.randomUUID()).timeLimitSeconds(180).build();
+        scenario = ScenarioEntity.builder().id(UUID.randomUUID()).timeLimitSeconds(180).status(ScenarioStatus.APPROVED).build();
+        SessionEntity session = SessionEntity.builder().id(UUID.randomUUID()).startedAt(OffsetDateTime.now())
+                .scenarioIds(new UUID[]{scenario.getId()}).build();
         when(sessionRepository.findById(session.getId())).thenReturn(java.util.Optional.of(session));
         when(scenarioRepository.findById(scenario.getId())).thenReturn(java.util.Optional.of(scenario));
         when(operatorCardRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -116,6 +121,38 @@ class OperatorCardServiceTest {
         assertDoesNotThrow(this::commit);
 
         verify(evaluationService).markAiUnavailable(cardId);
+    }
+
+    @Test
+    void cardOfArchivedScenarioIsRejected() {
+        scenario.setStatus(ScenarioStatus.ARCHIVED);
+
+        OperatorCardException e = assertThrows(OperatorCardException.class, () -> service.submitCard(token, request));
+
+        assertTrue(e.getMessage().contains("not approved"));
+        verify(operatorCardRepository, never()).save(any());
+    }
+
+    @Test
+    void cardOfDraftScenarioIsRejected() {
+        scenario.setStatus(ScenarioStatus.DRAFT);
+
+        assertThrows(OperatorCardException.class, () -> service.submitCard(token, request));
+        verify(operatorCardRepository, never()).save(any());
+    }
+
+    @Test
+    void cardOfScenarioOutsideSessionIsRejected() throws Exception {
+        ScenarioEntity foreign = ScenarioEntity.builder().id(UUID.randomUUID()).timeLimitSeconds(180)
+                .status(ScenarioStatus.APPROVED).build();
+        when(scenarioRepository.findById(foreign.getId())).thenReturn(java.util.Optional.of(foreign));
+        SubmitOperatorCardRequestDto foreignRequest = new SubmitOperatorCardRequestDto(
+                null, request.sessionId(), foreign.getId(), request.submittedCard(), null, null, null, 60, null);
+
+        OperatorCardException e = assertThrows(OperatorCardException.class, () -> service.submitCard(token, foreignRequest));
+
+        assertTrue(e.getMessage().contains("not part of this session"));
+        verify(operatorCardRepository, never()).save(any());
     }
 
     @Test
