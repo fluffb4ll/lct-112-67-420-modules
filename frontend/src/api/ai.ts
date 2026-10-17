@@ -6,6 +6,11 @@
  *
  * Контур может быть не запущен или работать без моделей — тогда каждая функция бросает
  * AiUnavailable, а вызывающий код откатывается на свой вариант (шаблон, Web Speech, ввод текстом).
+ *
+ * В сборке nginx пускает к /ai/ только после входа: проверяет ту же httpOnly-куку AUTH_TOKEN,
+ * что и бэкенд (как в http.ts — браузер прикладывает её сам), и ограничивает частоту запросов.
+ * 401 (сессия истекла) и 429 (лимит) здесь тоже AiUnavailable: сессию сбросит первый же запрос
+ * к бэкенду, а голос и текст сценария откатятся на браузерные варианты.
  */
 
 import type { Scenario } from '../domain/types';
@@ -17,7 +22,7 @@ async function aiFetch(path: string, init: RequestInit & { timeoutMs?: number } 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), init.timeoutMs ?? 90_000);
   try {
-    const res = await fetch(`/ai${path}`, { ...init, signal: ctrl.signal });
+    const res = await fetch(`/ai${path}`, { ...init, credentials: 'same-origin', signal: ctrl.signal });
     if (!res.ok) throw new AiUnavailable(`ИИ-контур ответил ${res.status}`);
     return res;
   } catch (e) {

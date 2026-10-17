@@ -3,6 +3,7 @@ package com.fluffb4ll.lct112HttpBackend.controller;
 import com.fluffb4ll.lct112HttpBackend.dto.request.LoginRequestDto;
 import com.fluffb4ll.lct112HttpBackend.dto.response.LoginResponseDto;
 import com.fluffb4ll.lct112HttpBackend.dto.response.UserInfoDto;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.AuthTokenExpiredException;
 import com.fluffb4ll.lct112HttpBackend.service.AuthService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
@@ -50,6 +51,24 @@ public class AuthController {
         return ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, deleteCookie.toString())
                 .build();
+    }
+
+    /**
+     * Лёгкая проверка входа для nginx (auth_request перед прокси на ИИ-контур /ai/):
+     * 204 — токен действителен, 401 — куки нет, она битая, истекла или пользователь отключён.
+     * auth_request понимает только 2xx и 401/403 (остальное превращает в 500),
+     * поэтому все отказы отдаются здесь же как 401, без GlobalExceptionHandler.
+     */
+    @GetMapping("/check")
+    public ResponseEntity<Void> check(@CookieValue(name = "AUTH_TOKEN", required = false) String token) {
+        if (token == null || token.isBlank())
+            return ResponseEntity.status(401).build();
+        try {
+            authService.verifyAuthToken(UUID.fromString(token), null);
+            return ResponseEntity.noContent().build();
+        } catch (IllegalArgumentException | AuthenticationException | AuthTokenExpiredException e) {
+            return ResponseEntity.status(401).build();
+        }
     }
 
 //    @PostMapping("/signup")
