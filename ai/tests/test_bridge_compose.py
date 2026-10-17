@@ -177,15 +177,36 @@ def test_echo_rejection_is_logged_without_user_text(caplog):
     assert "Кировоградская" not in log
 
 
-def test_words_like_ne_nashli_are_not_spoilers():
+@pytest.mark.parametrize(
+    ("phrase", "spoils"),
+    [
+        ("но не нашли ключ", False),
+        ("но не нашёл ключ", False),
+        ("но не нашла ключ", False),
+        ("а дом не наш", True),
+        ("это не нашего района", True),
+        ("вызов не нашей зоны", True),
+    ],
+)
+def test_words_like_ne_nashli_are_not_spoilers(phrase, spoils):
     out = compose_scenario(
         {"scenario": draft(), "complication": "zone"},
         answer(
             description="Женщина застряла в лифте между 7 и 8 этажами. Соседи пытались помочь, "
-            "но не нашли ключ от машинного отделения."
+            f"{phrase} от машинного отделения."
         ),
     )
-    assert "description" in out["applied"]
+    assert ("description" in out["rejected"]) is spoils
+    assert ("description" in out["applied"]) is not spoils
+
+
+def test_short_draft_words_do_not_make_new_words_old():
+    # в черновике есть «в» и «не»: слова на эти буквы — всё равно новые
+    out = compose_scenario(
+        {"scenario": draft("progress"), "complication": "progress"},
+        answer(title="Внутри взрослых нет, вода не выключена"),
+    )
+    assert "title" in out["applied"]
 
 
 def test_spoilers_checked_only_for_hidden_complications():
