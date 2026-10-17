@@ -16,6 +16,7 @@ import com.fluffb4ll.lct112HttpBackend.model.enums.EventType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.OperatorCardStatus;
 import com.fluffb4ll.lct112HttpBackend.model.enums.Permissions;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.AiEvaluationUnavailableException;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.OperatorCardException;
 import com.fluffb4ll.lct112HttpBackend.repository.EvaluationRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
@@ -422,8 +423,7 @@ public class EvaluationService {
                 || (user.getRole().getPermissionsAsSet() != null && user.getRole().getPermissionsAsSet().contains(Permissions.TEACHER_CAN_EDIT_SCENARIOS.name()));
 
         if (!isTeacherOrAdmin) {
-            // В тексте должно быть «permission»: фронт по нему отличает нехватку прав от истёкшей сессии
-            throw new AuthenticationException(deniedMessage);
+            throw new ForbiddenException(deniedMessage);
         }
     }
 }

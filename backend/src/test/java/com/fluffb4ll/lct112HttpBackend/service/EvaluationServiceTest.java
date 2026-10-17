@@ -11,6 +11,7 @@ import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.AiEvaluationStatus;
 import com.fluffb4ll.lct112HttpBackend.model.enums.OperatorCardStatus;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.AiEvaluationUnavailableException;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.repository.EvaluationRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -301,10 +302,10 @@ class EvaluationServiceTest {
         UserEntity otherStudent = user("ROLE_STUDENT");
         when(authService.verifyAuthToken(token, null)).thenReturn(otherStudent);
 
-        AuthenticationException e = assertThrows(AuthenticationException.class,
+        // 403, не 401: на 401 фронт считает сессию истёкшей и разлогинивает
+        ForbiddenException e = assertThrows(ForbiddenException.class,
                 () -> service.getEvaluationByCardId(token, card.getId()));
 
-        // «permission» в тексте — иначе фронт сочтёт 401 истёкшей сессией и разлогинит
         assertTrue(e.getMessage().contains("permission"));
         verify(evaluationRepository, never()).findByCardId(any());
     }

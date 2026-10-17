@@ -11,6 +11,7 @@ import com.fluffb4ll.lct112HttpBackend.model.enums.EntityType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.EventType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.Permissions;
 import com.fluffb4ll.lct112HttpBackend.model.enums.ScenarioStatus;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.SessionException;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.ScenarioRepository;
@@ -125,7 +126,7 @@ public class SessionService {
                     currentUser.getId()
             );
             if (!isMember && !"ROLE_ADMIN".equals(currentUser.getRole().getName())) {
-                throw new AuthenticationException("You are not a member of this session's study group");
+                throw new ForbiddenException("You do not have permission to view this session: not a member of its study group");
             }
         }
 
@@ -288,8 +289,7 @@ public class SessionService {
                 currentUser.getId()
         );
         if (!isMember) {
-            // «permission» в тексте — иначе фронт сочтёт 401 истёкшей сессией и разлогинит
-            throw new AuthenticationException("You do not have permission to view this session");
+            throw new ForbiddenException("You do not have permission to view this session");
         }
         List<OperatorCardEntity> ownCards = operatorCardRepository.findBySessionId(sessionId).stream()
                 .filter(c -> c.getStudent() != null && c.getStudent().getId().equals(currentUser.getId()))
@@ -362,7 +362,7 @@ public class SessionService {
             throw new AuthenticationException("Unauthorized");
         }
         if (!isTeacherOrAdmin(user)) {
-            throw new AuthenticationException("You do not have permission to manage sessions");
+            throw new ForbiddenException("You do not have permission to manage sessions");
         }
     }
 

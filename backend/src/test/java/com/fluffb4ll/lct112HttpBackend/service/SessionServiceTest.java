@@ -14,6 +14,7 @@ import com.fluffb4ll.lct112HttpBackend.entity.SessionEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.StudyGroupEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.ScenarioStatus;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.SessionException;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.ScenarioRepository;
@@ -311,10 +312,10 @@ class SessionServiceTest {
         sessionWithCardsOfTwoStudents();
         when(studyGroupMemberRepository.existsByIdGroupIdAndIdStudentId(groupId, outsiderId)).thenReturn(false);
 
-        AuthenticationException e = assertThrows(AuthenticationException.class,
+        // 403, не 401: на 401 фронт считает сессию истёкшей и разлогинивает
+        ForbiddenException e = assertThrows(ForbiddenException.class,
                 () -> sessionService.getSession(token, sessionId));
 
-        // «permission» — фронт не разлогинивает на таком 401
         assertTrue(e.getMessage().contains("permission"));
         verify(operatorCardRepository, never()).findBySessionId(any());
     }
@@ -324,11 +325,31 @@ class SessionServiceTest {
         loggedInAs(user(studentId, "ROLE_STUDENT"));
         when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(SessionEntity.builder().id(sessionId).build()));
 
-        AuthenticationException e = assertThrows(AuthenticationException.class,
+        ForbiddenException e = assertThrows(ForbiddenException.class,
                 () -> sessionService.getSession(token, sessionId));
 
         assertTrue(e.getMessage().contains("permission"));
         verify(operatorCardRepository, never()).findBySessionId(any());
+    }
+
+    @Test
+    void outsiderCannotReadIncomingCards() throws AuthenticationException {
+        UUID outsiderId = UUID.randomUUID();
+        loggedInAs(user(outsiderId, "ROLE_STUDENT"));
+        sessionWithCardsOfTwoStudents();
+        when(studyGroupMemberRepository.existsByIdGroupIdAndIdStudentId(groupId, outsiderId)).thenReturn(false);
+
+        // Раньше 401 с текстом без «permission» — фронт разлогинивал обучающегося
+        assertThrows(ForbiddenException.class, () -> sessionService.getIncomingCardsStream(token, sessionId));
+        verify(operatorCardRepository, never()).findBySessionId(any());
+    }
+
+    @Test
+    void studentCannotEndSession() throws AuthenticationException {
+        loggedInAs(user(studentId, "ROLE_STUDENT"));
+
+        assertThrows(ForbiddenException.class, () -> sessionService.endSession(token, sessionId));
+        verifyNoInteractions(sessionRepository);
     }
 
     @SuppressWarnings("unchecked")
