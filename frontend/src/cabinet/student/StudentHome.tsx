@@ -18,6 +18,7 @@ import { AttemptDetails } from '../shared/AttemptDetails';
 import { Handbook } from './Handbook';
 import { ServerLesson } from './ServerLesson';
 import { ServerProfile } from './ServerProfile';
+import { useServerScenarios } from './useServerScenarios';
 
 /*
  * Кабинет обучающегося: назначенные занятия, самостоятельная тренировка по рекомендации ИИ,
@@ -31,6 +32,9 @@ export function StudentHome() {
   const db = useDb((s) => s.db);
   const start = useRun((s) => s.start);
   const [details, setDetails] = useState<Attempt | null>(null);
+  const groupId = info?.studyGroups?.[0]?.id ?? user?.groupId;
+  // для серверного пользователя — утверждённые сценарии занятий группы с бэкенда
+  const serverIds = useServerScenarios(info ? groupId : undefined);
 
   const scMap = useMemo(() => new Map(db.scenarios.map((s) => [s.id, s])), [db.scenarios]);
   const hasStaleLive = !!user && db.live.some((l) => l.studentId === user.id);
@@ -50,7 +54,7 @@ export function StudentHome() {
   const messages = db.messages.filter((m) => m.to === user.id && !m.read);
 
   const assignedIds = new Set(db.sessions.filter((s) => s.groupId === user.groupId).flatMap((s) => s.scenarioIds));
-  const pool = db.scenarios.filter((s) => s.status === 'approved' && s.serviceKind === service.kind && assignedIds.has(s.id));
+  const pool = db.scenarios.filter((s) => s.status === 'approved' && s.serviceKind === service.kind && (assignedIds.has(s.id) || serverIds.has(s.id)));
   const diff = recommendDifficulty(ratings, weak);
   const recommended = [...pool]
     .sort((a, b) => Number(b.skills.includes(weak)) - Number(a.skills.includes(weak)) || Math.abs(a.difficulty - diff) - Math.abs(b.difficulty - diff))
@@ -89,7 +93,7 @@ export function StudentHome() {
       {tab === 'lessons' && (
         <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
           <div className="flex flex-col gap-4">
-            <ServerLesson user={user} groupId={info?.studyGroups?.[0]?.id ?? user.groupId} />
+            <ServerLesson user={user} groupId={groupId} />
             <Panel title="Занятия группы">
               {sessions.length === 0 && <Empty>Сейчас нет назначенных занятий.</Empty>}
               <div className="flex flex-col gap-3">
