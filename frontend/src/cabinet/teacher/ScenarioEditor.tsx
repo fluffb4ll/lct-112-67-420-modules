@@ -8,7 +8,9 @@ import {
   deleteScenarioOnServer,
   fromDetails,
   getScenario,
+  isServerScenarioId,
   listCategories,
+  setScenarioStatusOnServer,
   toBody,
   updateScenarioOnServer,
   type IncidentCategory,
@@ -94,6 +96,8 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
   const [grammar, setGrammar] = useState<string[] | null>(null);
   const [askDelete, setAskDelete] = useState(false);
   const [busy, setBusy] = useState(false);
+  // сценарий получен с сервера: управлять статусом можно и без локальной копии
+  const [loaded, setLoaded] = useState(false);
   // категории происшествий с сервера: бэкенд требует их id при сохранении сценария
   const [serverCategories, setServerCategories] = useState<IncidentCategory[] | null>(null);
   const [categoryId, setCategoryId] = useState<number | ''>('');
@@ -117,6 +121,7 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
         setDraft(fromDetails(d));
         setCategoryId(d.category?.id ?? '');
         setDirty(false);
+        setLoaded(true);
       },
       (e: unknown) => alive && !existing && setMsg({ tone: 'warn', text: describeError(e, 'Не удалось загрузить сценарий с сервера') }),
     );
@@ -224,6 +229,23 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
       if (id === 'new') navigate(`/teacher/bank/${savedId}`);
     } catch (e) {
       setMsg({ tone: 'warn', text: describeError(e, 'Сервер не принял сценарий') });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // архив и возврат в черновики: серверный сценарий сначала меняем на сервере — иначе он
+  // останется утверждённым и виден обучающимся; локальную копию трогаем только после его согласия
+  const changeStatus = async (status: 'archived' | 'draft') => {
+    setBusy(true);
+    try {
+      if (isServerScenarioId(id)) await setScenarioStatusOnServer(id, status === 'archived' ? 'ARCHIVED' : 'DRAFT');
+      setScenarioStatus(user, id, status);
+      setDraft((d) => ({ ...d, status }));
+      if (status === 'archived') navigate('/teacher/bank');
+      else setMsg({ tone: 'ok', text: 'Сценарий возвращён в черновики.' });
+    } catch (e) {
+      setMsg({ tone: 'warn', text: describeError(e, 'Сервер не дал сменить статус сценария') });
     } finally {
       setBusy(false);
     }
@@ -519,19 +541,18 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
             </div>
           </Panel>
 
-          {existing && (
+          {(existing || loaded) && (
             <div className="flex flex-wrap gap-2">
               {draft.status !== 'archived' && (
-                <Button
-                  onClick={() => {
-                    setScenarioStatus(user, draft.id, 'archived');
-                    navigate('/teacher/bank');
-                  }}
-                >
+                <Button disabled={busy} onClick={() => void changeStatus('archived')}>
                   В архив
                 </Button>
               )}
-              {draft.status === 'archived' && <Button onClick={() => setScenarioStatus(user, draft.id, 'draft')}>Вернуть в черновики</Button>}
+              {draft.status === 'archived' && (
+                <Button disabled={busy} onClick={() => void changeStatus('draft')}>
+                  Вернуть в черновики
+                </Button>
+              )}
               {draft.status === 'draft' && (
                 <Button
                   variant="danger"
