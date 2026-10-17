@@ -122,7 +122,7 @@ class OperatorCardServiceTest {
     void executorIsBounded() {
         ThreadPoolTaskExecutor executor = new AiEvaluationExecutorConfig().aiEvaluationExecutor();
         try {
-            assertEquals(2, executor.getCorePoolSize());
+            assertEquals(4, executor.getCorePoolSize());
             assertEquals(4, executor.getMaxPoolSize());
             assertEquals(50, executor.getQueueCapacity());
             assertEquals("ai-eval-", executor.getThreadNamePrefix());

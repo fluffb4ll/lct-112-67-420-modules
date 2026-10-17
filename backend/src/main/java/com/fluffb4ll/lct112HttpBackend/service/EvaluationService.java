@@ -141,7 +141,7 @@ public class EvaluationService {
     /** Оценки ИИ не будет (например, очередь фоновой оценки переполнена) — отметить это для преподавателя. */
     public void markAiUnavailable(UUID cardId) {
         writeEvaluation(cardId, (card, evaluation) -> {
-            evaluation.setAiStatus(AiEvaluationStatus.UNAVAILABLE);
+            markUnavailableUnlessDone(evaluation);
             evaluation.setUpdatedAt(OffsetDateTime.now());
             evaluationRepository.saveAndFlush(evaluation);
             return null;
@@ -179,9 +179,14 @@ public class EvaluationService {
             return buildAiRequest(card);
         });
 
-        Optional<AiEvaluationResponseDto> aiResponseOpt = aiEvaluationClient.requestEvaluation(requestDto);
-        if (aiResponseOpt.isEmpty()) {
+        Optional<AiEvaluationResponseDto> rawResponse = aiEvaluationClient.requestEvaluation(requestDto);
+        // Ответ без балла или с баллом вне 0..100 записывать нельзя (CHECK в БД) — это та же недоступность ИИ
+        Optional<AiEvaluationResponseDto> aiResponseOpt = rawResponse.filter(EvaluationService::isUsableAiResponse);
+        if (rawResponse.isEmpty()) {
             log.warn("AI evaluation was not returned by AI container for card {}", cardId);
+        } else if (aiResponseOpt.isEmpty()) {
+            log.warn("AI container returned unusable score for card {}: aiScore={}, finalScore={}",
+                    cardId, rawResponse.get().aiScore(), rawResponse.get().finalScore());
         }
 
         EvaluationDto saved;
@@ -200,7 +205,7 @@ public class EvaluationService {
                     }
                 } else {
                     // Прежние поля ИИ (если были) не трогаем — помечаем только неудачную попытку
-                    evaluation.setAiStatus(AiEvaluationStatus.UNAVAILABLE);
+                    markUnavailableUnlessDone(evaluation);
                 }
 
                 evaluation.setUpdatedAt(OffsetDateTime.now());
@@ -215,13 +220,31 @@ public class EvaluationService {
                 return EvaluationDto.fromEntity(savedEvaluation);
             });
         } catch (RuntimeException e) {
-            // Ответ ИИ не удалось сохранить (например, балл вне 0..100) — не оставляем PENDING навсегда
+            // Результат не удалось сохранить — не оставляем PENDING навсегда
             log.warn("Failed to save AI evaluation for card {}: {}", cardId, e.getMessage());
             markAiUnavailableQuietly(cardId);
             throw e;
         }
 
         return new AiRun(saved, aiResponseOpt.isPresent());
+    }
+
+    /**
+     * Пока ждали ИИ, параллельный запуск мог уже записать результат (OK) — его не перетираем:
+     * иначе рядом со свежим баллом висело бы «ИИ недоступен».
+     */
+    private static void markUnavailableUnlessDone(EvaluationEntity evaluation) {
+        if (evaluation.getAiStatus() != AiEvaluationStatus.OK) {
+            evaluation.setAiStatus(AiEvaluationStatus.UNAVAILABLE);
+        }
+    }
+
+    private static boolean isUsableAiResponse(AiEvaluationResponseDto response) {
+        return isScore(response.aiScore()) && (response.finalScore() == null || isScore(response.finalScore()));
+    }
+
+    private static boolean isScore(Integer value) {
+        return value != null && value >= 0 && value <= 100;
     }
 
     private void markAiUnavailableQuietly(UUID cardId) {

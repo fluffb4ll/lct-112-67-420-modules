@@ -3,6 +3,7 @@ package com.fluffb4ll.lct112HttpBackend.dto.response;
 import com.fluffb4ll.lct112HttpBackend.entity.EvaluationEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.AiEvaluationStatus;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
@@ -23,6 +24,12 @@ public record EvaluationDto(
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt
 ) {
+    /**
+     * PENDING дольше этого срока — запуск оборвался (рестарт бэкенда посреди вызова ИИ).
+     * С запасом больше таймаута чтения ИИ (app.ai.read-timeout-ms, 90 с).
+     */
+    static final Duration STALE_PENDING_AFTER = Duration.ofMinutes(5);
+
     public static EvaluationDto fromEntity(EvaluationEntity entity) {
         if (entity == null) {
             return null;
@@ -49,8 +56,13 @@ public record EvaluationDto(
      * Статус оценки ИИ. Неудачный перезапуск ставит UNAVAILABLE, но прежние поля ИИ не стирает —
      * преподаватель видит и старую оценку, и то, что последняя попытка не удалась.
      * Строки, записанные до появления колонки, считаются оценёнными, если у них есть балл ИИ.
+     * Зависший PENDING отдаётся как UNAVAILABLE, чтобы «ИИ оценивает…» не висело вечно.
      */
     private static AiEvaluationStatus aiStatusOf(EvaluationEntity entity) {
+        if (entity.getAiStatus() == AiEvaluationStatus.PENDING && entity.getUpdatedAt() != null
+                && entity.getUpdatedAt().isBefore(OffsetDateTime.now().minus(STALE_PENDING_AFTER))) {
+            return AiEvaluationStatus.UNAVAILABLE;
+        }
         if (entity.getAiStatus() != null) {
             return entity.getAiStatus();
         }

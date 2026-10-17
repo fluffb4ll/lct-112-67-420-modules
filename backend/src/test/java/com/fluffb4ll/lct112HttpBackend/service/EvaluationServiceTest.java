@@ -23,6 +23,7 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import javax.naming.AuthenticationException;
 import java.lang.reflect.Method;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -235,6 +236,60 @@ class EvaluationServiceTest {
     }
 
     @Test
+    void aiResponseWithoutScoreIsUnavailable() throws Exception {
+        when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.empty());
+        List<AiEvaluationStatus> savedStatuses = recordSavedStatuses();
+        when(aiEvaluationClient.requestEvaluation(any())).thenReturn(Optional.of(aiResponse(null)));
+
+        assertThrows(AiEvaluationUnavailableException.class, () -> service.evaluateWithAi(token, card.getId()));
+
+        assertEquals(List.of(AiEvaluationStatus.PENDING, AiEvaluationStatus.UNAVAILABLE), savedStatuses);
+    }
+
+    @Test
+    void outOfRangeAiScoreIsUnavailableWithoutWriting() {
+        // Балл 101 нарушил бы CHECK ai_score 0..100 — не пишем его и не гоняем повторы
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.empty());
+        List<AiEvaluationStatus> savedStatuses = recordSavedStatuses();
+        when(aiEvaluationClient.requestEvaluation(any())).thenReturn(Optional.of(aiResponse(101)));
+
+        assertDoesNotThrow(() -> service.triggerAiEvaluationById(card.getId()));
+
+        assertEquals(List.of(AiEvaluationStatus.PENDING, AiEvaluationStatus.UNAVAILABLE), savedStatuses);
+        assertEquals(0, transactionManager.rollbacks);
+    }
+
+    @Test
+    void failedRunDoesNotOverwriteConcurrentOk() {
+        EvaluationEntity row = new EvaluationEntity(card);
+        when(evaluationRepository.findByCardIdForUpdate(card.getId())).thenReturn(Optional.of(row));
+        when(evaluationRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(aiEvaluationClient.requestEvaluation(any())).thenAnswer(inv -> {
+            // Пока автооценка ждала ИИ, ручной запуск успел записать результат
+            row.setAiScore(80);
+            row.setAiStatus(AiEvaluationStatus.OK);
+            return Optional.empty();
+        });
+
+        service.triggerAiEvaluationById(card.getId());
+
+        assertEquals(AiEvaluationStatus.OK, row.getAiStatus());
+        assertEquals(80, row.getAiScore());
+    }
+
+    @Test
+    void stalePendingIsReportedAsUnavailable() {
+        EvaluationEntity evaluation = new EvaluationEntity(card);
+        evaluation.setAiStatus(AiEvaluationStatus.PENDING);
+        assertEquals(AiEvaluationStatus.PENDING, EvaluationDto.fromEntity(evaluation).aiStatus());
+
+        // Запуск оборвался (рестарт посреди вызова ИИ) — «ИИ оценивает…» не должно висеть вечно
+        evaluation.setUpdatedAt(OffsetDateTime.now().minusMinutes(30));
+        assertEquals(AiEvaluationStatus.UNAVAILABLE, EvaluationDto.fromEntity(evaluation).aiStatus());
+    }
+
+    @Test
     void legacyRowWithAiScoreReportsOk() {
         EvaluationEntity legacy = new EvaluationEntity(card);
         legacy.setAiScore(40);
@@ -284,7 +339,7 @@ class EvaluationServiceTest {
         return statuses;
     }
 
-    private static AiEvaluationResponseDto aiResponse(int score) {
+    private static AiEvaluationResponseDto aiResponse(Integer score) {
         return new AiEvaluationResponseDto(score, Map.of(), Map.of(), "рекомендации", score);
     }
 
@@ -303,6 +358,8 @@ class EvaluationServiceTest {
         @Override
         public TransactionStatus getTransaction(TransactionDefinition definition) {
             assertFalse(active, "транзакции не должны вкладываться");
+            // Запись идёт и из afterCommit сдачи: REQUIRED присоединился бы к уже завершённой транзакции
+            assertEquals(TransactionDefinition.PROPAGATION_REQUIRES_NEW, definition.getPropagationBehavior());
             active = true;
             journal.add("begin");
             return new SimpleTransactionStatus(true);

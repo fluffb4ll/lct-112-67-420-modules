@@ -18,7 +18,8 @@ public class AiEvaluationExecutorConfig {
     @Bean(name = AI_EVALUATION_EXECUTOR)
     public ThreadPoolTaskExecutor aiEvaluationExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(2);
+        // core = max: пул растёт сверх core только при полной очереди, поэтому сразу держим все 4 потока
+        executor.setCorePoolSize(4);
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(50);
         executor.setThreadNamePrefix("ai-eval-");
