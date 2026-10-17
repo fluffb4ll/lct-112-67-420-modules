@@ -80,7 +80,11 @@ export async function fetchGroupScenarios(groupId: string, api: GroupScenariosAp
     sessions.push(...res.content);
     if (page + 1 >= res.totalPages || !res.content.length) break;
   }
-  const details = await inBatches(sessions, async (s) => ({ startedAt: Date.parse(s.startedAt ?? '') || 0, ...(await api.getSession(s.id)) }));
+  // из занятия берём только scenarioIds: в ответе getSession есть свой startedAt (ISO-строка), он не нужен
+  const details = await inBatches(sessions, async (s) => {
+    const { scenarioIds } = await api.getSession(s.id);
+    return { startedAt: Date.parse(s.startedAt ?? '') || 0, scenarioIds };
+  });
   // для каждого сценария — когда началось самое свежее занятие с ним
   const lastStart = new Map<string, number>();
   for (const r of details) {

@@ -123,6 +123,18 @@ describe('fetchGroupScenarios — сценарии, снятые с заняти
     expect(a.asked).toEqual(['a']);
   });
 
+  it('занятие, как его отдаёт бэкенд (startedAt строкой и в getSession), не ломает метку', async () => {
+    const started = new Date(NOW - 2 * HOUR).toISOString();
+    const store = memory({ a: NOW - HOUR });
+    const a: GroupScenariosApi & { asked: string[] } = {
+      ...api({ s1: ['a', 'b'] }, { a: withdrawn(), b: details('b') }),
+      listSessions: async () => ({ content: [{ id: 's1', startedAt: started }], totalPages: 1 }),
+      getSession: async () => ({ id: 's1', startedAt: started, scenarioIds: ['a', 'b'] }) as { scenarioIds: string[] },
+    };
+    await fetchGroupScenarios('g1', a, store, NOW);
+    expect(a.asked).toEqual(['b']);
+  });
+
   it('сбой сети и 5xx не запоминаются', async () => {
     const store = memory();
     await fetchGroupScenarios('g1', api({ s1: ['a', 'b', 'c'] }, { a: new ApiError(0, 'сеть'), b: new ApiError(503, ''), c: new Error('?') }), store, NOW);

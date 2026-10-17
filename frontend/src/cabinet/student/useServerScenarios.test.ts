@@ -59,7 +59,23 @@ describe('refreshServerScenarios', () => {
   it('ответ после ухода со страницы не записывается', async () => {
     const before = useServerScenarioStore.getState();
     await refreshServerScenarios('g2', () => true, async () => [{ ...seed, id: 'srv-late' }]);
-    expect(useServerScenarioStore.getState()).toBe(before);
+    const after = useServerScenarioStore.getState();
+    expect(after.scenarios).toBe(before.scenarios);
+    expect(after.groupId).toBe(before.groupId);
+  });
+
+  it('статус загрузки: ok после ответа; при сбое — failed, набор прежний', async () => {
+    let resolve: (v: never[]) => void = () => undefined;
+    const pending = refreshServerScenarios('g1', undefined, () => new Promise((r) => (resolve = r)));
+    expect(useServerScenarioStore.getState().status).toBe('loading');
+    resolve([]);
+    await pending;
+    expect(useServerScenarioStore.getState().status).toBe('ok');
+
+    await refreshServerScenarios('g1', undefined, async () => [{ ...seed, id: 'srv-kept' }]);
+    await expect(refreshServerScenarios('g1', undefined, async () => Promise.reject(new Error('сеть')))).rejects.toThrow('сеть');
+    expect(useServerScenarioStore.getState().status).toBe('failed');
+    expect(useServerScenarioStore.getState().scenarios.map((s) => s.id)).toEqual(['srv-kept']);
   });
 
   it('сценарий карточки серверного занятия — в отдельном сторе, обновление набора группы его не стирает', async () => {

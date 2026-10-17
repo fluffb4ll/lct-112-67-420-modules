@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import type { Scenario } from '../../domain/types';
-import { setServerScenarios, useServerScenarioStore } from '../../store/serverScenarios';
+import { setServerScenarios, setServerScenariosStatus, useServerScenarioStore } from '../../store/serverScenarios';
 import { fetchGroupScenarios } from './serverScenarios';
 
 /**
@@ -26,7 +26,15 @@ export function useServerScenarios(groupId: string | undefined): Scenario[] {
 
 /** Загрузить и заменить набор целиком: сценарий, ставший архивным или снятый с занятий, пропадает. */
 export async function refreshServerScenarios(groupId: string, stopped: () => boolean = () => false, fetch = fetchGroupScenarios) {
-  const list = await fetch(groupId);
+  setServerScenariosStatus('loading');
+  let list: Scenario[];
+  try {
+    list = await fetch(groupId);
+  } catch (e) {
+    // сбой — не повод считать сценарии снятыми с занятий (store: status)
+    if (!stopped()) setServerScenariosStatus('failed');
+    throw e;
+  }
   if (!stopped()) setServerScenarios(groupId, list);
 }
 
