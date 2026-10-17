@@ -100,3 +100,10 @@ def test_address_abbreviations_and_quotes_are_not_cut():
     )
     assert "— Укажите адрес: ул. Кировоградская, д. 15." in out
     assert '— Назовите "Домовой" в комментарии.' in out
+
+
+def test_empty_summary_with_remarks_has_no_bare_header():
+    for summary in ("", "Обучающийся молодец, good job"):
+        out = recs(verdict(summary, ["Укажите номер дома в докладе."]))
+        assert "Разбор ИИ" not in out
+        assert "Замечания ИИ:\n— Укажите номер дома в докладе." in out

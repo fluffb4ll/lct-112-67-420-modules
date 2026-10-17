@@ -276,7 +276,8 @@ def evaluate_card(request: dict[str, Any], llm: LLMProvider | None) -> dict[str,
     if verdict is not None:
         summary, remarks = _clean_feedback(verdict.get("summary"), verdict.get("remarks"))
         if summary or remarks:
-            text.append(f"Разбор ИИ: {summary}".rstrip())
+            # итог мог целиком уйти в мусор — тогда без пустого «Разбор ИИ:», только замечания
+            text.append(f"Разбор ИИ: {summary}" if summary else "Замечания ИИ:")
             text.extend(f"— {r}" for r in remarks)
         elif failed:
             names = ", ".join(_lower_first(c.title) for c in failed)
