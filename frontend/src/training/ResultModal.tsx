@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { useDb } from '../api/db';
+import { useAllScenarios } from '../store/serverScenarios';
 import { DEFAULT_NORMS } from '../domain/evaluate';
 import { SKILL_LABELS } from '../domain/skills';
 import type { CardResult } from '../store/training';
@@ -17,7 +17,7 @@ const orangeBtn = 'h-10 border border-arm-orange bg-white px-4 text-[15px] text-
 
 export function ResultModal({ result, isLast, onNext }: { result: CardResult; isLast: boolean; onNext: () => void }) {
   const [showRef, setShowRef] = useState(false);
-  const scenarios = useDb((s) => s.db.scenarios);
+  const scenarios = useAllScenarios();
   const server = useServerScore(result.serverCardId);
   const ev = result.evaluation;
   const sc = result.scenario;

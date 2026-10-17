@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { reviewAttempt, type Actor } from '../../api';
 import { useDb } from '../../api/db';
+import { useAllScenarios } from '../../store/serverScenarios';
 import { dateTime } from '../../domain/format';
 import { SKILL_LABELS } from '../../domain/skills';
 import type { Attempt } from '../../domain/types';
@@ -15,7 +16,7 @@ import { cx } from '../../ui/cx';
  */
 
 export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attempt; onClose: () => void; reviewer?: Actor }) {
-  const scenarios = useDb((s) => s.db.scenarios);
+  const scenarios = useAllScenarios();
   const users = useDb((s) => s.db.users);
   const sc = scenarios.find((s) => s.id === attempt.scenarioId);
   const ev = attempt.evaluation;

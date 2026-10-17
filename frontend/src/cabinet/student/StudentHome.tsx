@@ -18,6 +18,7 @@ import { AttemptDetails } from '../shared/AttemptDetails';
 import { Handbook } from './Handbook';
 import { ServerLesson } from './ServerLesson';
 import { ServerProfile } from './ServerProfile';
+import { useAllScenarios } from '../../store/serverScenarios';
 import { useServerScenarios } from './useServerScenarios';
 
 /*
@@ -34,9 +35,11 @@ export function StudentHome() {
   const [details, setDetails] = useState<Attempt | null>(null);
   const groupId = info?.studyGroups?.[0]?.id ?? user?.groupId;
   // для серверного пользователя — утверждённые сценарии занятий группы с бэкенда
-  const serverIds = useServerScenarios(info ? groupId : undefined);
+  const serverScenarios = useServerScenarios(info ? groupId : undefined);
+  const serverIds = useMemo(() => new Set(serverScenarios.map((s) => s.id)), [serverScenarios]);
+  const scenarios = useAllScenarios();
 
-  const scMap = useMemo(() => new Map(db.scenarios.map((s) => [s.id, s])), [db.scenarios]);
+  const scMap = useMemo(() => new Map(scenarios.map((s) => [s.id, s])), [scenarios]);
   const hasStaleLive = !!user && db.live.some((l) => l.studentId === user.id);
 
   // занятие прервано (закрыта вкладка, перезагрузка) — убираем «в работе» из мониторинга преподавателя
@@ -54,7 +57,7 @@ export function StudentHome() {
   const messages = db.messages.filter((m) => m.to === user.id && !m.read);
 
   const assignedIds = new Set(db.sessions.filter((s) => s.groupId === user.groupId).flatMap((s) => s.scenarioIds));
-  const pool = db.scenarios.filter((s) => s.status === 'approved' && s.serviceKind === service.kind && (assignedIds.has(s.id) || serverIds.has(s.id)));
+  const pool = scenarios.filter((s) => s.status === 'approved' && s.serviceKind === service.kind && (assignedIds.has(s.id) || serverIds.has(s.id)));
   const diff = recommendDifficulty(ratings, weak);
   const recommended = [...pool]
     .sort((a, b) => Number(b.skills.includes(weak)) - Number(a.skills.includes(weak)) || Math.abs(a.difficulty - diff) - Math.abs(b.difficulty - diff))

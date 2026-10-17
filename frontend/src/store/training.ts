@@ -26,6 +26,7 @@ import type {
   User,
 } from '../domain/types';
 import { blip, chime } from '../training/sounds';
+import { allScenarios } from './serverScenarios';
 
 /*
  * Прогон занятия на эмуляторе АРМ (станция ДДС).
@@ -174,11 +175,12 @@ function backgroundJournal(service: DdsService, now: number): Incident[] {
 
 function pickNext(user: User, skill: Skill, kind: DdsService['kind'], excludeId: string): string | undefined {
   const db = getDb();
-  const map = new Map(db.scenarios.map((s) => [s.id, s]));
+  const scenarios = allScenarios();
+  const map = new Map(scenarios.map((s) => [s.id, s]));
   const ratings = computeRatings(db.attempts.filter((a) => a.studentId === user.id), map);
   const diff = recommendDifficulty(ratings, skill);
   const done = new Set(db.attempts.filter((a) => a.studentId === user.id).map((a) => a.scenarioId));
-  const pool = db.scenarios.filter((s) => s.status === 'approved' && s.serviceKind === kind && s.skills.includes(skill) && s.id !== excludeId);
+  const pool = scenarios.filter((s) => s.status === 'approved' && s.serviceKind === kind && s.skills.includes(skill) && s.id !== excludeId);
   const ranked = [...pool].sort((a, b) => Number(done.has(a.id)) - Number(done.has(b.id)) || Math.abs(a.difficulty - diff) - Math.abs(b.difficulty - diff));
   return ranked[0]?.id;
 }
@@ -280,7 +282,8 @@ export const useRun = create<RunState>((set, get) => {
   function arrive() {
     const s = get();
     const db = getDb();
-    const tpl = db.scenarios.find((x) => x.id === s.queue[s.index]);
+    const scenarios = allScenarios();
+    const tpl = scenarios.find((x) => x.id === s.queue[s.index]);
     if (!tpl || !s.user) {
       set({ finishedAll: true });
       return;
@@ -302,7 +305,7 @@ export const useRun = create<RunState>((set, get) => {
     }
     const incidentId = allocIncidentId();
     const incident = materialize(scenario.incident, incidentId, now, s.service);
-    const map = new Map(db.scenarios.map((x) => [x.id, x]));
+    const map = new Map(scenarios.map((x) => [x.id, x]));
     const predicted = predictSuccess(computeRatings(db.attempts.filter((a) => a.studentId === s.user!.id), map), scenario);
     set({
       journal: [incident, ...context, ...s.journal],

@@ -1,38 +1,33 @@
-import { useEffect, useState } from 'react';
-import { mutate } from '../../api/db';
+import { useEffect } from 'react';
+import type { Scenario } from '../../domain/types';
+import { setServerScenarios, useServerScenarioStore } from '../../store/serverScenarios';
 import { fetchGroupScenarios } from './serverScenarios';
 
 /**
- * Утверждённые сценарии занятий группы с сервера: кладёт их в локальные данные (на них работает
- * эмулятор) и возвращает их id. Без группы или без бэкенда — пустое множество.
+ * Утверждённые сценарии занятий группы с сервера. Каждая загрузка заменяет набор целиком
+ * (store/serverScenarios), в общие локальные данные они не попадают. Без группы — пусто.
  */
-export function useServerScenarios(groupId: string | undefined): Set<string> {
-  const [ids, setIds] = useState<{ groupId: string; ids: Set<string> } | null>(null);
+export function useServerScenarios(groupId: string | undefined): Scenario[] {
+  const own = useServerScenarioStore((s) => (groupId && s.groupId === groupId ? s.scenarios : EMPTY));
 
   useEffect(() => {
     if (!groupId) return;
     let stopped = false;
-    fetchGroupScenarios(groupId)
-      .then((list) => {
-        if (stopped || !list.length) return;
-        mutate((d) => {
-          for (const sc of list) {
-            const i = d.scenarios.findIndex((x) => x.id === sc.id);
-            if (i >= 0) d.scenarios[i] = sc;
-            else d.scenarios.unshift(sc);
-          }
-        });
-        setIds({ groupId, ids: new Set(list.map((s) => s.id)) });
-      })
-      .catch(() => {
-        // нет сети или прав — тренируемся на том, что есть локально
-      });
+    refreshServerScenarios(groupId, () => stopped).catch(() => {
+      // нет сети или прав — тренируемся на том, что загружено раньше и есть локально
+    });
     return () => {
       stopped = true;
     };
   }, [groupId]);
 
-  return ids && ids.groupId === groupId ? ids.ids : EMPTY;
+  return own;
 }
 
-const EMPTY = new Set<string>();
+/** Загрузить и заменить набор целиком: сценарий, ставший архивным или снятый с занятий, пропадает. */
+export async function refreshServerScenarios(groupId: string, stopped: () => boolean = () => false, fetch = fetchGroupScenarios) {
+  const list = await fetch(groupId);
+  if (!stopped()) setServerScenarios(groupId, list);
+}
+
+const EMPTY: Scenario[] = [];
