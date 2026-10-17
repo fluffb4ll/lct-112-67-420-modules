@@ -10,6 +10,7 @@ import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.EntityType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.EventType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.Permissions;
+import com.fluffb4ll.lct112HttpBackend.model.enums.ScenarioStatus;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.SessionException;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.ScenarioRepository;
@@ -61,6 +62,10 @@ public class SessionService {
         List<ScenarioEntity> scenarios = scenarioRepository.findAllById(request.scenarioIds());
         if (scenarios.size() != request.scenarioIds().size()) {
             throw new SessionException("One or more scenarios not found");
+        }
+        // черновики и архив обучающимся не выдаются — занятие собирается только из утверждённых
+        if (scenarios.stream().anyMatch(sc -> sc.getStatus() != ScenarioStatus.APPROVED)) {
+            throw new SessionException("Only approved scenarios can be used in a session");
         }
 
         List<UserEntity> students = studyGroupMemberRepository.findUsersByGroupId(studyGroup.getId());
@@ -128,7 +133,7 @@ public class SessionService {
         if (session.getScenarioIds() != null && session.getScenarioIds().length > 0) {
             assignedScenarioIds = Arrays.asList(session.getScenarioIds());
         } else {
-            List<ScenarioEntity> approved = scenarioRepository.findByStatus(com.fluffb4ll.lct112HttpBackend.model.enums.ScenarioStatus.APPROVED);
+            List<ScenarioEntity> approved = scenarioRepository.findByStatus(ScenarioStatus.APPROVED);
             assignedScenarioIds = approved.stream().map(ScenarioEntity::getId).toList();
         }
 
@@ -171,6 +176,7 @@ public class SessionService {
 
         List<IncomingCardDto> incomingCards = new ArrayList<>();
         int currentOffset = 0;
+        int withdrawnCount = 0;
         Integer nextCardInSeconds = null;
 
         for (int i = 0; i < studentScenarios.size(); i++) {
@@ -186,6 +192,14 @@ public class SessionService {
             boolean hasArrived = elapsedSeconds >= currentOffset || session.getEndedAt() != null;
             boolean isSubmitted = submittedScenarioToCardMap.containsKey(sId);
             UUID submittedCardId = submittedScenarioToCardMap.get(sId);
+
+            // сценарий сняли с занятий (архив) или вернули в черновики уже после старта:
+            // обучающемуся его больше не выдаём и из плана занятия исключаем. Интервал выше уже
+            // учтён, поэтому время прихода остальных карточек не сдвигается
+            if (scenario.getStatus() != ScenarioStatus.APPROVED && !isSubmitted) {
+                withdrawnCount++;
+                continue;
+            }
 
             if (hasArrived) {
                 // Notice: callerProfile is strictly excluded from client DTO
@@ -206,13 +220,14 @@ public class SessionService {
             }
         }
 
-        boolean isSessionCompleted = submittedCards.size() >= targetCount || session.getEndedAt() != null;
+        int effectiveTargetCount = targetCount - withdrawnCount;
+        boolean isSessionCompleted = submittedCards.size() >= effectiveTargetCount || session.getEndedAt() != null;
 
         return new IncomingCardsStreamDto(
                 sessionId,
                 session.getStartedAt(),
                 elapsedSeconds,
-                targetCount,
+                effectiveTargetCount,
                 submittedCards.size(),
                 isSessionCompleted,
                 incomingCards,
