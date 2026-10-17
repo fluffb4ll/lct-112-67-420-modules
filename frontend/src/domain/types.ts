@@ -196,7 +196,8 @@ export type Skill =
   | 'literacy'; // грамотность текста
 
 export type ScenarioStatus = 'draft' | 'approved' | 'archived';
-export type ScenarioOrigin = 'dataset' | 'generated' | 'teacher' | 'student';
+/** template — сгенерирован, но текст остался из шаблона классификатора (языковая модель не писала) */
+export type ScenarioOrigin = 'dataset' | 'generated' | 'template' | 'teacher' | 'student';
 
 /** Вводная: информация, которая «поступает» обучающемуся по ходу отработки */
 export interface ScenarioInput {
@@ -387,6 +388,10 @@ export interface Attempt {
   events: TrainingEvent[];
   evaluation?: Evaluation;
   review?: TeacherReview;
+  /** id карточки на сервере, если попытка сдана в серверном занятии — по нему берётся оценка ИИ */
+  serverCardId?: string;
+  /** порог зачёта занятия на момент попытки — для вердикта по серверной оценке */
+  passScore?: number;
 }
 
 /** Состояние «прямо сейчас» — для мониторинга преподавателем в реальном времени */

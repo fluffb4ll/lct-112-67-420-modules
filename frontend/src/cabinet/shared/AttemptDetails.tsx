@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { reviewAttempt, type Actor } from '../../api';
 import { useDb } from '../../api/db';
+import { useAllScenarios } from '../../store/serverScenarios';
 import { dateTime } from '../../domain/format';
 import { SKILL_LABELS } from '../../domain/skills';
 import type { Attempt } from '../../domain/types';
+import { attemptVerdict } from '../../training/serverScore';
+import { useServerScore } from '../../training/useServerScore';
 import { Badge, Button, Input, Modal, Notice, Textarea } from '../../ui';
 import { cx } from '../../ui/cx';
 
@@ -13,7 +16,7 @@ import { cx } from '../../ui/cx';
  */
 
 export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attempt; onClose: () => void; reviewer?: Actor }) {
-  const scenarios = useDb((s) => s.db.scenarios);
+  const scenarios = useAllScenarios();
   const users = useDb((s) => s.db.users);
   const sc = scenarios.find((s) => s.id === attempt.scenarioId);
   const ev = attempt.evaluation;
@@ -21,6 +24,9 @@ export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attemp
   const [score, setScore] = useState(String(attempt.review?.score ?? ev?.score ?? ''));
   const [saved, setSaved] = useState(false);
   const student = users.find((u) => u.id === attempt.studentId);
+  // попытка сдана в серверном занятии: итог — оценка на сервере, локальный балл — предварительный
+  const server = useServerScore(attempt.serverCardId);
+  const passed = attemptVerdict(attempt, server);
 
   const EVENT_LABELS: Record<string, string> = {
     arrived: 'Поступила карточка',
@@ -46,9 +52,15 @@ export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attemp
         {student && <span className="text-c-text">{student.fullName}</span>}
         <span>{dateTime(attempt.startedAt)}</span>
         <span>· карточка № {attempt.incidentId}</span>
-        {ev && <Badge tone={ev.passed ? 'ok' : 'bad'}>{ev.passed ? 'Зачёт' : 'Незачёт'}</Badge>}
+        {passed !== null && <Badge tone={passed ? 'ok' : 'bad'}>{passed ? 'Зачёт' : 'Незачёт'}</Badge>}
         {ev && <b className="text-c-text">{attempt.review?.score ?? ev.score} баллов</b>}
         {attempt.review?.score !== undefined && ev && attempt.review.score !== ev.score && <span>(авто: {ev.score})</span>}
+        {server && (
+          <span>
+            · {server.kind === 'score' ? <b className="text-c-text">{server.score} — {server.label}</b> : server.label}
+            {ev && ' (баллы выше — предварительно по правилам)'}
+          </span>
+        )}
       </div>
 
       {ev && (

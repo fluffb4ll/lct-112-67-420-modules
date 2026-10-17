@@ -8,7 +8,10 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const target = env.VITE_API_TARGET || 'http://100.116.127.113:8080'
-  // ИИ-контур (генерация текста сценариев, распознавание и синтез речи)
+  // ИИ-контур (генерация текста сценариев, распознавание и синтез речи).
+  // ВНИМАНИЕ: в разработке /ai/ проксируется напрямую — без проверки входа и лимитов частоты,
+  // которые в сборке ставит nginx (docker/nginx.conf.template). Не открывайте dev-сервер наружу
+  // (vite --host) при запущенном ИИ-контуре: любой в сети сможет гонять модели и все его ручки.
   const aiTarget = env.VITE_AI_TARGET || 'http://localhost:8090'
   return {
     plugins: [react(), tailwindcss()],

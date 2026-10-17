@@ -35,7 +35,7 @@ export function peerReply(peer: CallPeer, number: string, transcript: string, sc
   if (peer.isChief) {
     if (!scenario) return 'Вас понял. Работайте по карточке. Конец связи.';
     const addressGroup = scenario.expected.reportMustMention[0];
-    const noAddress = addressGroup && matchGroups(text, [addressGroup]).missing.length > 0;
+    const noAddress = addressGroup && matchGroups(text, [addressGroup], { fuzzy: true }).missing.length > 0;
     return (noAddress ? 'Адрес не назвали — в следующий раз начинайте с адреса. ' : '') + scenario.chiefReply;
   }
   const d = DIRECTORY.find((x) => x.number === number);

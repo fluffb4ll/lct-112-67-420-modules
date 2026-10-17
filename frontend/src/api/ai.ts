@@ -16,14 +16,24 @@
 import type { Scenario } from '../domain/types';
 import type { Complication } from './generator';
 
-export class AiUnavailable extends Error {}
+export class AiUnavailable extends Error {
+  /** HTTP-статус ответа, если контур ответил (401, 429, 503…); без ответа — undefined */
+  readonly status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** 429 от nginx: превышен лимит частоты запросов к ИИ-контуру — стоит подождать и повторить */
+export const isAiRateLimited = (e: unknown) => e instanceof AiUnavailable && e.status === 429;
 
 async function aiFetch(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), init.timeoutMs ?? 90_000);
   try {
     const res = await fetch(`/ai${path}`, { ...init, credentials: 'same-origin', signal: ctrl.signal });
-    if (!res.ok) throw new AiUnavailable(`ИИ-контур ответил ${res.status}`);
+    if (!res.ok) throw new AiUnavailable(`ИИ-контур ответил ${res.status}`, res.status);
     return res;
   } catch (e) {
     throw e instanceof AiUnavailable ? e : new AiUnavailable('ИИ-контур недоступен');
