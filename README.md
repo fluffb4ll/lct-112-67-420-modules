@@ -43,9 +43,10 @@ docker compose up -d --build
 
 ### 3. Доступ к сервисам
 - **Фронтенд**: [http://localhost](http://localhost) (порт `80` по умолчанию)
-- **Бэкенд API**: [http://localhost:8080](http://localhost:8080)
+- **Бэкенд API**: [http://localhost:8080](http://localhost:8080) — только с этой машины (`BACKEND_BIND=127.0.0.1`);
+  фронт ходит к API через nginx
 - **ИИ-сервис**: [http://localhost:8090](http://localhost:8090) — только с этой машины (`AI_BIND=127.0.0.1`)
-- **База данных PostgreSQL**: `localhost:5432`
+- **База данных PostgreSQL**: `localhost:5432` — только с этой машины (`POSTGRES_BIND=127.0.0.1`)
 
 ---
 
@@ -174,5 +175,7 @@ docker run --rm -v "$PWD/backend":/app -v lct-m2:/root/.m2 -w /app eclipse-temur
   вместе с новой БД — иначе ни один сохранённый пароль не подойдёт. `POSTGRES_PASSWORD` тоже демо
   (`dds_password` без `.env`, `dds_password_secret` из `.env.example`) и задаётся только при создании
   тома `pgdata`.
-- **Порты 8080 и 5432** в compose опубликованы на все интерфейсы. На публичном стенде закройте
-  их файрволом или задайте `BACKEND_PORT=127.0.0.1:8080`, `POSTGRES_PORT=127.0.0.1:5432` в `.env`.
+- **Порты 8080 и 5432** тоже опубликованы только на `127.0.0.1` (`BACKEND_BIND`, `POSTGRES_BIND`):
+  фронт ходит к API через nginx, бэкенд к БД — по сети compose. Открыть наружу — `BACKEND_BIND=0.0.0.0`
+  в `.env` (нужно, если к этому бэкенду ходит Vite dev с другой машины, например Raspberry Pi
+  в Tailscale); БД наружу открывать не нужно.
