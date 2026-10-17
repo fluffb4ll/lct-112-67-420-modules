@@ -134,12 +134,15 @@ export function Softphone() {
     const rec = await recording.current?.stop();
     recording.current = null;
     let transcript = (textMode ? typed : heard).trim();
-    if (!textMode && sttMode.current === 'server' && rec?.blob) {
-      setRecognizing(true);
-      const a = run.current?.scenario.incident.address;
-      const text = await recognize(rec.blob, a ? [a.street, a.house].filter(Boolean) : []);
-      if (alive.current) setRecognizing(false);
-      if (!live()) return; // звонок сброшен, пока распознавали
+    if (!textMode && sttMode.current === 'server') {
+      let text: string | null = ''; // запись пуста (микрофон ничего не дал) — как нераспознанная речь
+      if (rec?.blob) {
+        setRecognizing(true);
+        const a = run.current?.scenario.incident.address;
+        text = await recognize(rec.blob, a ? [a.street, a.house].filter(Boolean) : []);
+        if (alive.current) setRecognizing(false);
+        if (!live()) return; // звонок сброшен, пока распознавали
+      }
       if (!text) {
         // распознать не вышло — звонок продолжается: доклад повторяется голосом через браузер или вводится текстом
         const next = sttFallback(text, sttAvailable());

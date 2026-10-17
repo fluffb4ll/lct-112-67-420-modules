@@ -1,9 +1,10 @@
 import { useState, type ReactNode } from 'react';
 import { useDb } from '../api/db';
+import { DEFAULT_NORMS } from '../domain/evaluate';
 import { SKILL_LABELS } from '../domain/skills';
 import type { CardResult } from '../store/training';
 import { cx } from '../ui/cx';
-import { PRELIMINARY_LABEL } from './serverScore';
+import { scoreBadge, serverStatusLine } from './serverScore';
 import { useServerScore } from './useServerScore';
 
 /*
@@ -41,6 +42,7 @@ export function ResultModal({ result, isLast, onNext }: { result: CardResult; is
 
   const next = ev.recommendation.nextScenarioId ? scenarios.find((s) => s.id === ev.recommendation.nextScenarioId) : undefined;
   const sec = (v: number | null) => (v === null ? '—' : `${Math.round(v)} с`);
+  const badge = scoreBadge(ev, server, !!result.fromServer, result.passScore ?? DEFAULT_NORMS.passScore);
 
   return (
     <Overlay width={900}>
@@ -53,19 +55,13 @@ export function ResultModal({ result, isLast, onNext }: { result: CardResult; is
             // итог по серверному занятию ставит сервер: одна цифра, а разбор ниже — по правилам
             <p className="mt-1 text-[12px] text-arm-muted">
               Разбор ниже — по правилам тренажёра: {ev.score} из 100, {ev.passed ? 'зачёт' : 'незачёт'}.{' '}
-              {server?.kind === 'score'
-                ? 'Итоговая оценка — на сервере, она может отличаться от разбора.'
-                : server
-                  ? server.label[0].toUpperCase() + server.label.slice(1)
-                  : 'Карточка отправляется на сервер…'}
+              {serverStatusLine(result.sendFailed, server)}
             </p>
           )}
         </div>
-        <div className={cx('flex w-[110px] shrink-0 flex-col items-center justify-center text-center text-white', ev.passed ? 'bg-arm-dark' : 'bg-[#ff0000]')}>
-          <span className="text-[36px] leading-none font-bold">{server?.kind === 'score' ? server.score : ev.score}</span>
-          <span className="mt-1 px-1 text-[11px]">
-            {server?.kind === 'score' ? server.label : result.fromServer ? PRELIMINARY_LABEL : ev.passed ? 'зачёт' : 'незачёт'} · из 100
-          </span>
+        <div className={cx('flex w-[110px] shrink-0 flex-col items-center justify-center text-center text-white', badge.passed ? 'bg-arm-dark' : 'bg-[#ff0000]')}>
+          <span className="text-[36px] leading-none font-bold">{badge.score}</span>
+          <span className="mt-1 px-1 text-[11px]">{badge.label} · из 100</span>
         </div>
       </header>
 

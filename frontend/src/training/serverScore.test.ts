@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Evaluation as ServerEvaluation } from '../api/sessions';
-import { evaluationOfCard, serverScoreView } from './serverScore';
+import { evaluationOfCard, PRELIMINARY_LABEL, scoreBadge, serverScoreView, serverStatusLine } from './serverScore';
 
 const base: ServerEvaluation = {
   id: 'e1',
@@ -55,5 +55,36 @@ describe('evaluationOfCard', () => {
     expect(evaluationOfCard({ id: 'c1', evaluation: base })).toBe(base);
     expect(evaluationOfCard({ id: 'c1', evaluation: null })).toBeNull();
     expect(evaluationOfCard(null)).toBeNull();
+  });
+});
+
+describe('serverStatusLine', () => {
+  it('карточка не ушла на сервер — так и пишем, а не «отправляется…» навсегда', () => {
+    expect(serverStatusLine('Не удалось отправить карточку на сервер', null)).toBe('Не удалось отправить карточку на сервер — итоговой оценки по ней не будет.');
+  });
+
+  it('ждём отправку, затем оценку, затем итог', () => {
+    expect(serverStatusLine(undefined, null)).toBe('Карточка отправляется на сервер…');
+    expect(serverStatusLine(undefined, { kind: 'pending', label: 'оценка ИИ готовится…' })).toBe('Оценка ИИ готовится…');
+    expect(serverStatusLine(undefined, { kind: 'score', score: 90, label: 'оценка ИИ' })).toContain('может отличаться');
+  });
+});
+
+describe('scoreBadge', () => {
+  it('серверный балл ниже порога — плашка «незачёт», даже если локально зачёт', () => {
+    expect(scoreBadge({ score: 90, passed: true }, { kind: 'score', score: 40, label: 'оценка ИИ' }, true, 70)).toEqual({
+      score: 40,
+      passed: false,
+      label: 'оценка ИИ',
+    });
+  });
+
+  it('серверный балл выше порога — зачёт', () => {
+    expect(scoreBadge({ score: 50, passed: false }, { kind: 'score', score: 85, label: 'оценка преподавателя' }, true, 70).passed).toBe(true);
+  });
+
+  it('пока оценки сервера нет — локальная, помеченная как предварительная', () => {
+    expect(scoreBadge({ score: 90, passed: true }, { kind: 'pending', label: '…' }, true, 70)).toEqual({ score: 90, passed: true, label: PRELIMINARY_LABEL });
+    expect(scoreBadge({ score: 50, passed: false }, null, false, 70).label).toBe('незачёт');
   });
 });

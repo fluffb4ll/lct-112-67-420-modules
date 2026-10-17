@@ -25,3 +25,25 @@ export function evaluationOfCard(card: Record<string, unknown> | null | undefine
   const ev = card?.evaluation;
   return ev && typeof ev === 'object' ? (ev as ServerEvaluation) : null;
 }
+
+/** Подпись о судьбе карточки на сервере (под разбором) */
+export function serverStatusLine(sendFailed: string | undefined, server: ServerScoreView | null): string {
+  if (sendFailed) return `${sendFailed} — итоговой оценки по ней не будет.`;
+  if (server?.kind === 'score') return 'Итоговая оценка — на сервере, она может отличаться от разбора.';
+  if (server) return server.label[0].toUpperCase() + server.label.slice(1);
+  return 'Карточка отправляется на сервер…';
+}
+
+/**
+ * Цифра в плашке разбора. Пришла оценка сервера — показываем её, и цвет «зачёт/незачёт» тоже по ней
+ * (порог занятия), иначе локальный разбор; для серверного занятия он помечен как предварительный.
+ */
+export function scoreBadge(
+  local: { score: number; passed: boolean },
+  server: ServerScoreView | null,
+  fromServer: boolean,
+  passScore: number,
+): { score: number; passed: boolean; label: string } {
+  if (server?.kind === 'score') return { score: server.score, passed: server.score >= passScore, label: server.label };
+  return { score: local.score, passed: local.passed, label: fromServer ? PRELIMINARY_LABEL : local.passed ? 'зачёт' : 'незачёт' };
+}

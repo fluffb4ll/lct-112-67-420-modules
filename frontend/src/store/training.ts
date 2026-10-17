@@ -57,6 +57,10 @@ export interface CardResult {
   fromServer?: boolean;
   /** id сданной карточки на сервере — по нему опрашивается оценка ИИ */
   serverCardId?: string;
+  /** карточку не удалось отправить на сервер — текст ошибки */
+  sendFailed?: string;
+  /** порог зачёта занятия — для цвета плашки по серверной оценке */
+  passScore?: number;
 }
 
 interface RunState {
@@ -450,9 +454,11 @@ export const useRun = create<RunState>((set, get) => {
         evaluation,
       });
       // занятие с сервера: отправляем заполненную карточку на оценку
+      let sent = false;
       if (s.fromServer && s.sessionId) {
         const inc = get().journal.find((i) => i.id === cur.incidentId);
         if (inc) {
+          sent = true;
           const report = events
             .map((e) => e.transcript ?? '')
             .filter(Boolean)
@@ -478,12 +484,18 @@ export const useRun = create<RunState>((set, get) => {
               const r = get().result;
               if (r && get().current?.attemptId === cur.attemptId) set({ result: { ...r, serverCardId: cardId } });
             })
-            .catch((e: unknown) => set({ sendError: describeError(e, 'Не удалось отправить карточку на сервер') }));
+            .catch((e: unknown) => {
+              const msg = describeError(e, 'Не удалось отправить карточку на сервер');
+              set({ sendError: msg });
+              // разбор этой карточки ещё открыт — показываем в нём, что итоговой оценки не будет
+              const r = get().result;
+              if (r && get().current?.attemptId === cur.attemptId) set({ result: { ...r, sendFailed: msg } });
+            });
         }
       }
       set({
         current: cur,
-        result: { scenario: cur.scenario, evaluation, fromServer: !!(s.fromServer && s.sessionId) },
+        result: { scenario: cur.scenario, evaluation, fromServer: sent, passScore: s.norms.passScore },
         history: [...s.history, { title: cur.scenario.title, score: evaluation.score, passed: evaluation.passed }],
       });
     },
