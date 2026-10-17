@@ -41,7 +41,7 @@ def draft(complication="zone"):
 
 def answer(**over):
     base = {
-        "title": "Лифт застрял между этажами в доме чужой УК",
+        "title": "Лифт застрял между этажами на Кировоградской",
         "description": "Женщина застряла в лифте между 7 и 8 этажами, в кабине одна. Свет горит, "
         "связь с диспетчером лифта не отвечает. Пострадавших нет.",
         "chief_reply": "Это дом «Домового», не наш. Передайте им и закрывайте. Конец связи.",
@@ -88,6 +88,14 @@ def test_description_giving_away_complication_is_rejected():
     )
     assert "description" in out["rejected"]
     assert out["scenario"]["incident"]["descriptions"][0]["text"] == "Застревание в лифте."
+
+
+def test_title_giving_away_complication_is_rejected():
+    out = compose_scenario(
+        {"scenario": draft(), "complication": "zone"},
+        answer(title="Застревание в лифте — не наш дом"),
+    )
+    assert "title" in out["rejected"]
 
 
 def test_without_llm_returns_template():
