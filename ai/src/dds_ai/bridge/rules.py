@@ -75,10 +75,58 @@ def normalize(text: str) -> str:
     return _SPACES.sub(" ", _PUNCT.sub(" ", t)).strip()
 
 
-def match_groups(text: str, groups: list[list[str]]) -> tuple[int, list[list[str]]]:
-    """Группа синонимов (корней) упомянута, если в тексте есть хотя бы один её корень."""
+# Звуки, которые распознавание речи путает: звонкие и глухие, безударные гласные
+_FOLD = str.maketrans("здбгвжоея", "стпкфшаии")
+FUZZY_MIN_STEM = 5
+
+
+def _levenshtein(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _fuzzy_hit(words: list[str], stem: str) -> bool:
+    """Корень узнан в слове с ошибкой распознавания.
+
+    Префикс слова (длиной корня ±1 буква) после свёртки похожих звуков сравнивается с
+    корнем: корни из 5–6 букв должны совпасть точно, длинные — с одной правкой (Левенштейн).
+    Короткие корни и числа («19», «лифт») так не сравниваются: «лист» — не «лифт».
+    """
+    n = len(stem)
+    if n < FUZZY_MIN_STEM or not stem.isalpha():
+        return False
+    budget = 0 if n <= 6 else 1
+    target = stem.translate(_FOLD)
+    for w in words:
+        if len(w) < n - 1:
+            continue
+        for k in (n - 1, n, n + 1):
+            if k <= len(w) and _levenshtein(w[:k].translate(_FOLD), target) <= budget:
+                return True
+    return False
+
+
+def match_groups(
+    text: str, groups: list[list[str]], *, fuzzy: bool = False
+) -> tuple[int, list[list[str]]]:
+    """Группа синонимов (корней) упомянута, если в тексте есть хотя бы один её корень.
+
+    `fuzzy` — для текста из распознавания речи (доклад руководителю): корень засчитывается
+    и с типичной ошибкой STT («состревание» — «застре»). Набранный текст сверяется строго.
+    """
     t = normalize(text)
-    missing = [g for g in groups if not any(normalize(stem) in t for stem in g)]
+    words = t.split(" ") if fuzzy else []
+
+    def hit(stem: str) -> bool:
+        s = normalize(stem)
+        return s in t or (fuzzy and _fuzzy_hit(words, s))
+
+    missing = [g for g in groups if not any(hit(stem) for stem in g)]
     return len(groups) - len(missing), missing
 
 
@@ -353,7 +401,8 @@ def evaluate_rules(
     elif not facts.called_chief:
         pts, detail = 0, "Не было доклада руководителю смены"
     else:
-        hit, missing = match_groups(facts.report, report_groups)
+        # доклад звучит по телефону и приходит из распознавания речи — корни нечётко
+        hit, missing = match_groups(facts.report, report_groups, fuzzy=True)
         pts = 4 + round(hit / (len(report_groups) or 1) * 6)
         detail = (
             "В докладе не прозвучало: " + ", ".join(f"«{g[0]}…»" for g in missing)
