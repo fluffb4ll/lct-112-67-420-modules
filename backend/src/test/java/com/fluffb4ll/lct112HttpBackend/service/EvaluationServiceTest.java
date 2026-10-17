@@ -366,8 +366,9 @@ class EvaluationServiceTest {
 
     @Test
     void staleThresholdCoversWaitInFullAiQueue() {
-        // Ручной запуск в хвосте полной очереди: ceil(50 / 4) волн чужих вызовов + свой, каждый до 5 + 90 с
-        Duration worstQueuedRun = Duration.ofMillis(5_000 + 90_000).multipliedBy(50 / 4 + 1 + 1);
+        // Ручной запуск в хвосте полной очереди: ceil(50 / 4) волн чужих вызовов + свой, каждый — быстрый обрыв
+        // до 5 с и повтор до 5 + 90 с
+        Duration worstQueuedRun = Duration.ofMillis(5_000 + 5_000 + 90_000).multipliedBy(50 / 4 + 1 + 1);
         assertTrue(EvaluationDto.STALE_PENDING_AFTER.compareTo(worstQueuedRun) > 0,
                 () -> "STALE_PENDING_AFTER=" + EvaluationDto.STALE_PENDING_AFTER + " <= " + worstQueuedRun);
     }
