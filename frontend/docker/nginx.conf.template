@@ -1,14 +1,16 @@
 # Лимиты ИИ-контура (/ai/). Файл подключается в контексте http, поэтому зоны объявлены здесь, вне server.
-# Ключ — кука входа AUTH_TOKEN, а без неё — адрес клиента: так лимит считается на пользователя,
-# а не на весь класс за одним NAT. limit_req срабатывает раньше auth_request, поэтому есть ещё
-# общий лимит на адрес — от перебора случайных кук (каждая такая попытка — запрос к бэкенду).
+# Ключ — кука входа AUTH_TOKEN (только если она похожа на UUID), иначе — адрес клиента: так лимит
+# считается на пользователя, а не на весь класс за одним NAT, а мусорные куки не раздувают зоны.
+# limit_req срабатывает раньше auth_request, поэтому есть ещё лимиты на адрес: от перебора случайных
+# кук (каждая — запрос к бэкенду) и от сброса лимита генерации повторным входом (новый вход — новый токен).
 map $cookie_AUTH_TOKEN $ai_limit_key {
-    ""      $binary_remote_addr;
-    default $cookie_AUTH_TOKEN;
+    "~*^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" $cookie_AUTH_TOKEN;
+    default                                                              $binary_remote_addr;
 }
-limit_req_zone $ai_limit_key       zone=ai_voice:10m   rate=2r/s;
-limit_req_zone $ai_limit_key       zone=ai_compose:10m rate=10r/m;
-limit_req_zone $binary_remote_addr zone=ai_addr:10m    rate=20r/s;
+limit_req_zone $ai_limit_key       zone=ai_voice:10m        rate=2r/s;
+limit_req_zone $ai_limit_key       zone=ai_compose:10m      rate=20r/m;
+limit_req_zone $binary_remote_addr zone=ai_compose_addr:10m rate=60r/m;
+limit_req_zone $binary_remote_addr zone=ai_addr:10m         rate=50r/s;
 
 server {
     listen 80;
@@ -59,7 +61,7 @@ server {
 
         # что из голосового тракта есть на сервере — раз за загрузку страницы
         location = /ai/v1/voice {
-            limit_req zone=ai_addr burst=40 nodelay;
+            limit_req zone=ai_addr burst=100 nodelay;
             limit_req zone=ai_voice burst=10 nodelay;
             proxy_read_timeout 10s;
             set $ai "${AI_URL}";
@@ -69,7 +71,7 @@ server {
 
         # синтез реплики звонящего (фронт ждёт 30 с)
         location = /ai/v1/tts {
-            limit_req zone=ai_addr burst=40 nodelay;
+            limit_req zone=ai_addr burst=100 nodelay;
             limit_req zone=ai_voice burst=10 nodelay;
             proxy_read_timeout 35s;
             set $ai "${AI_URL}";
@@ -79,7 +81,7 @@ server {
 
         # распознавание записи доклада: тело — сама запись (фронт ждёт 60 с)
         location = /ai/v1/stt {
-            limit_req zone=ai_addr burst=40 nodelay;
+            limit_req zone=ai_addr burst=100 nodelay;
             limit_req zone=ai_voice burst=10 nodelay;
             client_max_body_size 10m;
             proxy_send_timeout 60s;
@@ -91,9 +93,10 @@ server {
 
         # языковая модель переписывает текст сценария — самое тяжёлое (фронт ждёт 90 с)
         location = /ai/v1/scenarios/compose {
-            limit_req zone=ai_addr burst=40 nodelay;
-            # пачка из ScenarioBank — до 6 сценариев подряд — проходит целиком
-            limit_req zone=ai_compose burst=6 nodelay;
+            limit_req zone=ai_addr burst=100 nodelay;
+            # пачка из ScenarioBank — до 6 сценариев подряд — проходит целиком, и вторая следом тоже
+            limit_req zone=ai_compose burst=12 nodelay;
+            limit_req zone=ai_compose_addr burst=30 nodelay;
             proxy_read_timeout 120s;
             set $ai "${AI_URL}";
             rewrite ^/ai/(.*)$ /$1 break;

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Проверка nginx фронта для /ai/: вход через auth_request, белый список путей, лимиты.
 # Поднимает изолированно (своя docker-сеть, порт 127.0.0.1:18081) nginx с docker/nginx.conf.template
-# и две заглушки: бэкенд (/api/auth/check: кука AUTH_TOKEN, начинающаяся с good, — 204, иначе 401)
+# и две заглушки: бэкенд (/api/auth/check: кука AUTH_TOKEN, начинающаяся с 900d, — 204, иначе 401)
 # и ИИ-контур (200 на всё, в ответе — путь, который до него дошёл). После проверки всё удаляется.
 #
 #   bash frontend/docker/check-ai-proxy.sh
@@ -48,7 +48,7 @@ class H(BaseHTTPRequestHandler):
             if n:  # подзапрос auth_request не должен тащить тело (запись STT)
                 return self._reply(400)
             cookies = dict(c.strip().split("=", 1) for c in (self.headers.get("Cookie") or "").split(";") if "=" in c)
-            return self._reply(204 if cookies.get("AUTH_TOKEN", "").startswith("good") else 401)
+            return self._reply(204 if cookies.get("AUTH_TOKEN", "").startswith("900d") else 401)
         self._reply(200, f"{self.command} {self.path} {n}".encode())
 
     do_GET = do_POST = _handle
@@ -87,10 +87,11 @@ burst() {
   local n="$1"; shift
   for _ in $(seq 1 "$n"); do curl -s -o /dev/null -w '%{http_code} ' "$@"; done
 }
-# лимит на адрес (20 r/s, burst 40) общий для всех проверок — даём ему восстановиться
+# лимит на адрес (50 r/s, burst 100) общий для всех проверок — даём ему восстановиться
 rest() { sleep 2.5; }
 
-GOOD='Cookie: AUTH_TOKEN=good-1'
+# кука входа — UUID, как у бэкенда; заглушка бэкенда пускает те, что начинаются на 900d
+GOOD='Cookie: AUTH_TOKEN=900d0000-0000-0000-0000-000000000001'
 BAD='Cookie: AUTH_TOKEN=00000000-0000-0000-0000-000000000000'
 JSON='Content-Type: application/json'
 
@@ -142,10 +143,10 @@ limit() {
 }
 
 echo "== лимиты"
-limit "compose, 10 подряд (10 r/m, burst 6)" 7 10 -X POST -H "$JSON" -H 'Cookie: AUTH_TOKEN=good-compose' -d '{}' "$BASE/ai/v1/scenarios/compose"
-limit "tts, 20 подряд (2 r/s, burst 10)" 11 20 -X POST -H "$JSON" -H 'Cookie: AUTH_TOKEN=good-tts' -d '{"text":"т"}' "$BASE/ai/v1/tts"
+limit "compose, 16 подряд (20 r/m, burst 12)" 13 16 -X POST -H "$JSON" -H 'Cookie: AUTH_TOKEN=900d0000-0000-0000-0000-00000000c0de' -d '{}' "$BASE/ai/v1/scenarios/compose"
+limit "tts, 20 подряд (2 r/s, burst 10)" 11 20 -X POST -H "$JSON" -H 'Cookie: AUTH_TOKEN=900d0000-0000-0000-0000-0000000000a1' -d '{"text":"т"}' "$BASE/ai/v1/tts"
 rest
-check 200 "compose другим пользователем не упирается в чужой лимит" -X POST -H "$JSON" -H 'Cookie: AUTH_TOKEN=good-other' -d '{}' "$BASE/ai/v1/scenarios/compose"
+check 200 "compose другим пользователем не упирается в чужой лимит" -X POST -H "$JSON" -H 'Cookie: AUTH_TOKEN=900d0000-0000-0000-0000-0000000000b2' -d '{}' "$BASE/ai/v1/scenarios/compose"
 rest
 codes="$(burst 30 -H "$BAD" "$BASE/ai/v1/voice")"
 if grep -q 429 <<<"$codes" && ! grep -qv -e 401 -e 429 <<<"$(tr ' ' '\n' <<<"$codes" | grep .)"; then
@@ -154,8 +155,25 @@ else
   echo "FAIL  перебор без входа (ждали 401, затем 429): $codes"; FAILS=$((FAILS + 1))
 fi
 rest
-codes="$(for i in $(seq 1 120); do curl -s -o /dev/null -w '%{http_code} ' -H "Cookie: AUTH_TOKEN=random-$i" "$BASE/ai/v1/voice"; done)"
-if grep -q 429 <<<"$codes"; then echo "OK    перебор случайных кук, 120 подряд — общий лимит на адрес: $codes"; else echo "FAIL  перебор случайных кук без 429: $codes"; FAILS=$((FAILS + 1)); fi
+# «пришло 401, затем 429» — ни одного другого кода
+only401then429() {
+  local what="$1" codes="$2"
+  if grep -q 429 <<<"$codes" && ! tr ' ' '\n' <<<"$codes" | grep . | grep -qv -e 401 -e 429; then
+    echo "OK    $what: $codes"
+  else
+    echo "FAIL  $what (ждали 401, затем 429): $codes"; FAILS=$((FAILS + 1))
+  fi
+}
+only401then429 "мусорная кука (не UUID) — лимит на адрес, 30 подряд" "$(burst 30 -H 'Cookie: AUTH_TOKEN=garbage' "$BASE/ai/v1/voice")"
+rest
+# перебор случайных UUID-кук: у каждой свой лимит, держит только общий лимит на адрес (50 r/s, burst 100)
+codes="$(seq 1 400 | xargs -P 16 -I{} sh -c 'printf "%s " "$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: AUTH_TOKEN=$(printf "%08x-0000-0000-0000-000000000000" {})" "$0/ai/v1/voice")"' "$BASE")"
+summary="$(tr ' ' '\n' <<<"$codes" | grep . | sort | uniq -c | tr -s ' ' | tr '\n' ',')"
+only401then429 "перебор случайных UUID-кук, 400 параллельно — итог по кодам [$summary]" "$codes" | sed -E 's/: [0-9 ]+$//'
+rest
+# повторный вход даёт новый токен — лимит генерации на адрес (60 r/m, burst 30) всё равно держит
+codes="$(for i in $(seq 1 40); do curl -s -o /dev/null -w '%{http_code} ' -X POST -H "$JSON" -H "Cookie: AUTH_TOKEN=$(printf '900d%04x-0000-0000-0000-000000000000' "$i")" -d '{}' "$BASE/ai/v1/scenarios/compose"; done)"
+if grep -q 200 <<<"$codes" && grep -q 429 <<<"$codes"; then echo "OK    compose, 40 разных входов с одного адреса: $codes"; else echo "FAIL  compose, 40 разных входов (ждали 200, затем 429): $codes"; FAILS=$((FAILS + 1)); fi
 
 echo
 if [ "$FAILS" = 0 ]; then echo "ВСЁ ОК"; else echo "ПРОВАЛОВ: $FAILS"; fi
