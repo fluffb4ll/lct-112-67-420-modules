@@ -9,7 +9,6 @@ import com.fluffb4ll.lct112HttpBackend.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.json.JsonParseException;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,7 +25,12 @@ public class AuditService {
     private final UserRepository userRepository;
     private final ObjectMapper objectMapper;
 
-    @Async
+    /**
+     * Синхронно, в своей транзакции: запись аудита не откатывается вместе с действием и не роняет его.
+     * Асинхронной её не делаем — сюда передают управляемые JPA-сущности (карточка, оценка), и
+     * сериализовать их в другом потоке, пока ими пользуется сессия вызывающего, небезопасно:
+     * ленивые поля там не загрузятся, а сама сессия Hibernate не потокобезопасна.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void logAction(UUID userId, EventType eventType, EntityType entityType,
                           UUID entityId, Object oldValue, Object newValue, String clientIp) {
