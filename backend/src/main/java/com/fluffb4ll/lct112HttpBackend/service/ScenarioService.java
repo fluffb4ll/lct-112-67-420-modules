@@ -31,6 +31,7 @@ import javax.naming.AuthenticationException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -206,6 +207,34 @@ public class ScenarioService {
     }
 
     @Transactional
+    public void changeScenarioStatus(UUID token, UUID scenarioId, String rawStatus) throws AuthenticationException {
+        UserEntity currentUser = authService.verifyAuthToken(token, Permissions.TEACHER_CAN_EDIT_SCENARIOS);
+
+        ScenarioStatus status = parseStatus(rawStatus);
+        // утверждение — только через approve: там проверяется полнота сценария
+        if (status != ScenarioStatus.ARCHIVED && status != ScenarioStatus.DRAFT) {
+            throw new ScenarioException("Scenario status can only be changed to ARCHIVED or DRAFT; use approve to approve it");
+        }
+
+        ScenarioEntity scenario = scenarioRepository.findById(scenarioId)
+                .orElseThrow(() -> new ScenarioException("Scenario not found"));
+
+        scenario.setStatus(status);
+        scenario.setUpdatedAt(OffsetDateTime.now());
+        scenarioRepository.save(scenario);
+
+        auditService.logAction(
+                currentUser.getId(),
+                EventType.SCENARIO_UPDATE,
+                EntityType.SCENARIO,
+                scenario.getId(),
+                null,
+                scenario,
+                HttpRequestUtil.getClientIp()
+        );
+    }
+
+    @Transactional
     public void deleteScenario(UUID token, UUID scenarioId) throws AuthenticationException {
         UserEntity currentUser = authService.verifyAuthToken(token, Permissions.TEACHER_CAN_EDIT_SCENARIOS);
 
@@ -289,6 +318,17 @@ public class ScenarioService {
         Page<ScenarioTableRowDto> rowPage = scenarioPage.map(ScenarioTableRowDto::fromEntity);
 
         return PageResponseDto.from(rowPage);
+    }
+
+    private ScenarioStatus parseStatus(String rawStatus) {
+        if (rawStatus == null || rawStatus.isBlank()) {
+            throw new ScenarioException("Scenario status must not be empty (expected: ARCHIVED, DRAFT)");
+        }
+        try {
+            return ScenarioStatus.valueOf(rawStatus.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new ScenarioException("Unknown scenario status: " + rawStatus);
+        }
     }
 
     private void validateScenarioRequest(

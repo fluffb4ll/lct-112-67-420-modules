@@ -7,6 +7,7 @@ import type { PageResponse } from './admin';
  *   POST   /api/scenarios/create   → 201 { scenarioId }
  *   POST   /api/scenarios/update
  *   POST   /api/scenarios/{id}/approve
+ *   POST   /api/scenarios/{id}/status { status: 'ARCHIVED' | 'DRAFT' }  (утверждение — только approve)
  *   DELETE /api/scenarios/{id}
  *   GET    /api/scenarios/{id}
  *   GET    /api/scenarios?categoryId=&complexity=&status=&search=&page=&size=
@@ -88,8 +89,13 @@ export const getScenario = (id: string) => apiFetch<ScenarioDetails>(`/scenarios
 export const createScenarioOnServer = (body: ScenarioBody) => apiFetch<{ scenarioId: string }>('/scenarios/create', { method: 'POST', body });
 export const updateScenarioOnServer = (scenarioId: string, body: ScenarioBody) => apiFetch<void>('/scenarios/update', { method: 'POST', body: { scenarioId, ...body } });
 export const approveScenarioOnServer = (id: string) => apiFetch<void>(`/scenarios/${id}/approve`, { method: 'POST' });
+export const setScenarioStatusOnServer = (id: string, status: Exclude<BackendStatus, 'APPROVED'>) =>
+  apiFetch<void>(`/scenarios/${id}/status`, { method: 'POST', body: { status } });
 export const deleteScenarioOnServer = (id: string) => apiFetch<void>(`/scenarios/${id}`, { method: 'DELETE' });
 export const listCategories = () => apiFetchOptional<IncidentCategory[]>('/scenarios/categories');
+
+/** Сценарий хранится на сервере (id — UUID); у локальных и встроенных id вида «sc-…» */
+export const isServerScenarioId = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
 /** Право преподавателя на работу с банком сценариев */
 export const PERMISSION_EDIT_SCENARIOS = 'TEACHER_CAN_EDIT_SCENARIOS';
