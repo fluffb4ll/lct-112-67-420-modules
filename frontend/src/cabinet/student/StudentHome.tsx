@@ -20,6 +20,7 @@ import { ServerLesson } from './ServerLesson';
 import { ServerProfile } from './ServerProfile';
 import { useAllScenarios } from '../../store/serverScenarios';
 import { useServerScenarios } from './useServerScenarios';
+import { scenarioTitle } from '../shared/withdrawn';
 
 /*
  * Кабинет обучающегося: назначенные занятия, самостоятельная тренировка по рекомендации ИИ,
@@ -205,7 +206,7 @@ export function StudentHome() {
                 {mine.map((a) => (
                   <tr key={a.id} className="cursor-pointer hover:bg-c-bg" onClick={() => setDetails(a)}>
                     <td className="whitespace-nowrap">{ddmmyyyy(a.startedAt)}</td>
-                    <td>{scMap.get(a.scenarioId)?.title ?? a.scenarioId}</td>
+                    <td>{scenarioTitle(scMap.get(a.scenarioId))}</td>
                     <td className="whitespace-nowrap">{MODE_LABELS[a.mode]}</td>
                     <td className="text-right font-medium tabular-nums">{finalScore(a)}</td>
                     <td>
