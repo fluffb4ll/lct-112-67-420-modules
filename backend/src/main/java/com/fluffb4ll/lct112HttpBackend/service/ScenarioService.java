@@ -227,10 +227,19 @@ public class ScenarioService {
 
     @Transactional
     public ScenarioDetailsDto getScenario(UUID token, UUID scenarioId) throws AuthenticationException {
-        authService.verifyAuthToken(token, Permissions.TEACHER_CAN_EDIT_SCENARIOS);
+        // одобренный сценарий нужен обучающемуся, чтобы открыть карточку занятия;
+        // черновики видит только тот, кто редактирует банк сценариев
+        UserEntity currentUser = authService.verifyAuthToken(token, null);
 
         ScenarioEntity scenario = scenarioRepository.findById(scenarioId)
                 .orElseThrow(() -> new ScenarioException("Scenario not found"));
+
+        boolean canEdit = currentUser.getRole() != null
+                && currentUser.getRole().getPermissionsAsSet() != null
+                && currentUser.getRole().getPermissionsAsSet().contains(Permissions.TEACHER_CAN_EDIT_SCENARIOS.name());
+        if (!canEdit && scenario.getStatus() != ScenarioStatus.APPROVED) {
+            throw new ScenarioException("Scenario not found");
+        }
 
         return ScenarioDetailsDto.fromEntity(scenario);
     }
