@@ -159,6 +159,9 @@ class LlamaCppProvider:
         if not self._lock.acquire(timeout=min(self.lock_timeout_s, timeout_s)):
             raise LLMBusy(f"llama.cpp занята другим запросом дольше {self.lock_timeout_s:g} с")
         try:
+            if time.monotonic() >= deadline:
+                # дождались блокировки, но срок вышел: не запускаем разбор промпта под ней
+                raise LLMBusy(f"llama.cpp освободилась позже срока запроса ({timeout_s:g} с)")
             return self._generate_locked(
                 prompt, max_tokens=max_tokens, grammar=grammar, deadline=deadline
             )

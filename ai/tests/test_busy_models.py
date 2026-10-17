@@ -1,5 +1,7 @@
 """Занятая модель: ожидание блокировки ограничено, вызывающий видит понятный отказ, а не висит."""
 
+import time
+
 import pytest
 
 from dds_ai.bridge.evaluate import evaluate_card
@@ -10,7 +12,7 @@ from dds_ai.llm.llamacpp_provider import LlamaCppProvider
 from tests.fakes import FakeLLM, FakeSTT, FakeTTS
 from tests.test_bridge_compose import draft
 from tests.test_bridge_evaluate import GOOD, request, run
-from tests.test_llm_llamacpp import gguf, llama  # noqa: F401 — фикстуры
+from tests.test_llm_llamacpp import FakeLlama, gguf, llama  # noqa: F401 — фикстуры
 
 
 def busy(_prompt):
@@ -95,3 +97,65 @@ def test_voice_busy_is_voice_unavailable():
             voice.transcribe(b"x")
     finally:
         voice._stt_run.release()
+
+
+class LateLock:
+    """Блокировка, которую отдают ровно к концу ожидания."""
+
+    def __init__(self):
+        self.held = False
+
+    def acquire(self, timeout=-1):
+        time.sleep(max(timeout, 0))
+        self.held = True
+        return True
+
+    def release(self):
+        self.held = False
+
+
+def test_llamacpp_lock_got_after_deadline_does_not_start_generation(llama, gguf):  # noqa: F811
+    p = LlamaCppProvider(gguf, lock_timeout_s=30, timeout_s=0.05)
+    p._lock = LateLock()
+    with pytest.raises(LLMBusy):
+        p.complete("промпт", max_tokens=8)
+    assert FakeLlama.instances[0].calls == [] and not p._lock.held
+
+
+def test_voice_load_wait_is_bounded(tmp_path):
+    voice_file = tmp_path / "ru_RU-irina-medium.onnx"
+    voice_file.write_bytes(b"onnx")
+    env = {
+        "DDS_STT_MODEL": "small",
+        "DDS_TTS_VOICE_PATH": str(voice_file),
+        "DDS_VOICE_LOCK_TIMEOUT_S": "0.05",
+    }
+    voice = VoiceService(env=env)
+    voice._stt_load.acquire()  # другой запрос долго грузит модель
+    voice._tts_load.acquire()
+    try:
+        with pytest.raises(VoiceBusy):
+            voice.transcribe(b"x")
+        with pytest.raises(VoiceBusy):
+            voice.synthesize("привет")
+    finally:
+        voice._stt_load.release()
+        voice._tts_load.release()
+
+
+def test_unconfigured_male_voice_skips_load_lock(monkeypatch, tmp_path):
+    import dds_ai.voice.tts.piper_provider as pp
+
+    monkeypatch.setattr(pp, "PiperTTS", lambda *a, **k: FakeTTS())
+    voice_file = tmp_path / "ru_RU-irina-medium.onnx"
+    voice_file.write_bytes(b"onnx")
+    voice = VoiceService(
+        env={"DDS_TTS_VOICE_PATH": str(voice_file), "DDS_VOICE_LOCK_TIMEOUT_S": "0.05"}
+    )
+    voice.synthesize("привет")  # женский загружен
+    voice._tts_load.acquire()  # кто-то грузит голос — мужской (не настроен) его не ждёт
+    try:
+        assert voice.synthesize("привет", voice="male")[:4] == b"RIFF"
+    finally:
+        voice._tts_load.release()
+    assert "male" not in voice.capabilities()["ttsModels"]

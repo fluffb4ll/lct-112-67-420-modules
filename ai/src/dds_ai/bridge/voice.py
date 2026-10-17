@@ -200,36 +200,52 @@ class VoiceService:
 
     # --- ленивая загрузка ---
 
+    def _wait_load(self, lock: threading.Lock, what: str) -> None:
+        # первая загрузка (и скачивание голоса) идёт под блокировкой; ждём её не дольше, чем работу
+        if not lock.acquire(timeout=self.lock_timeout_s):
+            raise VoiceBusy(f"{what} ещё загружается — повторите через несколько секунд")
+
     def _get_stt(self) -> STTProvider:
         if self._stt is not None:
             return self._stt
-        with self._stt_load:
-            if self._stt is not None:
-                return self._stt
-            model = self._env.get("DDS_STT_MODEL", "")
-            if not model:
-                raise VoiceUnavailable("STT не настроен (DDS_STT_MODEL)")
-            if self._stt_down():
-                raise VoiceUnavailable(self._stt_error or "STT недоступен")
-            try:
-                from ..voice.stt.faster_whisper_provider import FasterWhisperSTT
+        self._wait_load(self._stt_load, "модель распознавания")
+        try:
+            return self._load_stt()
+        finally:
+            self._stt_load.release()
 
-                self._stt = FasterWhisperSTT(model, max_seconds=self.max_audio_seconds)
-            except Exception as exc:
-                self._stt_error = f"STT не загрузился: {exc}"
-                self._stt_failed_at = self._clock()
-                log.warning(self._stt_error)
-                raise VoiceUnavailable(self._stt_error) from exc
-            self._stt_error = None
+    def _load_stt(self) -> STTProvider:
+        if self._stt is not None:
             return self._stt
+        model = self._env.get("DDS_STT_MODEL", "")
+        if not model:
+            raise VoiceUnavailable("STT не настроен (DDS_STT_MODEL)")
+        if self._stt_down():
+            raise VoiceUnavailable(self._stt_error or "STT недоступен")
+        try:
+            from ..voice.stt.faster_whisper_provider import FasterWhisperSTT
+
+            self._stt = FasterWhisperSTT(model, max_seconds=self.max_audio_seconds)
+        except Exception as exc:
+            self._stt_error = f"STT не загрузился: {exc}"
+            self._stt_failed_at = self._clock()
+            log.warning(self._stt_error)
+            raise VoiceUnavailable(self._stt_error) from exc
+        self._stt_error = None
+        return self._stt
 
     def _get_tts(self, gender: str) -> tuple[TTSProvider, str]:
         if gender not in _ENV_SUFFIX:
             raise ValueError(f"неизвестный голос {gender!r}")
         if gender in self._tts:
             return self._tts[gender]
-        with self._tts_load:
+        if not self._env.get(f"DDS_TTS_VOICE_PATH{_ENV_SUFFIX[gender]}") and "female" in self._tts:
+            return self._tts["female"]  # мужской голос не настроен — женский, без блокировки
+        self._wait_load(self._tts_load, "голос")
+        try:
             return self._load_tts(gender)
+        finally:
+            self._tts_load.release()
 
     def _load_tts(self, gender: str) -> tuple[TTSProvider, str]:
         if gender in self._tts:
