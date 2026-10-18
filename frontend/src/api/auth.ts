@@ -7,6 +7,7 @@ import { apiFetch } from './http';
  * Вход и выход через бэкенд.
  *   POST /api/auth/login {"username","password"} → UserInfoDto в теле + httpOnly-кука AUTH_TOKEN
  *   GET  /api/auth/logout → кука удаляется, токен отзывается
+ *   GET  /api/auth/me     → UserInfoDto владельца куки, 401 без входа
  * Типы повторяют DTO бэкенда (UUID приходят строками).
  */
 
@@ -48,6 +49,12 @@ export async function logoutRequest(): Promise<void> {
     // токен уже недействителен или сервер недоступен
   }
 }
+
+/**
+ * Кто вошёл по куке (GET /api/auth/me): кука одна на браузер, а вкладка помнит своего пользователя.
+ * 401 не уводит на страницу входа сам — решает вызывающий.
+ */
+export const meRequest = () => apiFetch<UserInfoDto>('/auth/me', { skipAuthRedirect: true });
 
 /** Права администратора с бэкенда */
 export const BACKEND_PERMISSIONS = {

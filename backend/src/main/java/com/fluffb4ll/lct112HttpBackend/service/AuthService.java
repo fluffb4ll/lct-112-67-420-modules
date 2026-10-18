@@ -84,6 +84,12 @@ public class AuthService {
         return tokenEntity.getUser();
     }
 
+    /** Пользователь по токену; DTO собирается в транзакции (open-in-view выключен, отдел и группы ленивые) */
+    @Transactional
+    public UserInfoDto currentUser(UUID receivedAT) throws AuthenticationException {
+        return UserInfoDto.fromEntity(verifyAuthToken(receivedAT, null));
+    }
+
     private LoginResponseDto createLoginResponse(UserEntity user, AuthTokenEntity token) {
         return new LoginResponseDto(
                 token.getToken(),
