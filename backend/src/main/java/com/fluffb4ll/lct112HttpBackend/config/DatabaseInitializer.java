@@ -216,6 +216,17 @@ public class DatabaseInitializer implements CommandLineRunner {
             jdbcTemplate.execute("ALTER TABLE training.evalutions ADD COLUMN IF NOT EXISTS ai_status VARCHAR(20);");
             jdbcTemplate.execute("ALTER TABLE training.evalutions ADD COLUMN IF NOT EXISTS ai_checks JSONB;");
 
+            // Одно идущее занятие на группу: проверка в SessionService не спасает от одновременного старта.
+            // В базе с уже задвоенными занятиями индекс не создастся — не роняем остальную инициализацию.
+            try {
+                jdbcTemplate.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS sessions_one_active_per_group
+                    ON training.sessions (study_group_id) WHERE ended_at IS NULL;
+                """);
+            } catch (Exception e) {
+                log.warn("Index sessions_one_active_per_group not created (finish duplicate active sessions first): {}", e.getMessage());
+            }
+
             // 16. Seed initial roles if empty
             Integer roleCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM iam.roles", Integer.class);
             if (roleCount == null || roleCount == 0) {

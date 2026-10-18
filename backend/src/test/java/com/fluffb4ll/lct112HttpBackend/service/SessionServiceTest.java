@@ -32,6 +32,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
@@ -229,7 +230,7 @@ class SessionServiceTest {
         SessionException e = assertThrows(SessionException.class, () -> teacherStartsWith(ScenarioStatus.ARCHIVED));
 
         assertTrue(e.getMessage().contains("approved"));
-        verify(sessionRepository, never()).save(any());
+        verify(sessionRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -238,7 +239,7 @@ class SessionServiceTest {
 
         assertTrue(e.getMessage().contains("approved"));
 
-        verify(sessionRepository, never()).save(any());
+        verify(sessionRepository, never()).saveAndFlush(any());
     }
 
     // ───────────── чужая группа: занятие назначает и завершает только её преподаватель ─────────────
@@ -263,7 +264,7 @@ class SessionServiceTest {
 
         assertThrows(ForbiddenException.class, () -> startIn(foreign));
 
-        verify(sessionRepository, never()).save(any());
+        verify(sessionRepository, never()).saveAndFlush(any());
         verifyNoInteractions(scenarioRepository);
     }
 
@@ -274,7 +275,7 @@ class SessionServiceTest {
 
         assertThrows(ForbiddenException.class, () -> startIn(ownerless));
 
-        verify(sessionRepository, never()).save(any());
+        verify(sessionRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -283,11 +284,11 @@ class SessionServiceTest {
         loggedInAs(user(UUID.randomUUID(), "ROLE_ADMIN"));
         when(scenarioRepository.findAllById(anyList())).thenReturn(List.of(scenario(approvedId, ScenarioStatus.APPROVED)));
         when(studyGroupMemberRepository.findUsersByGroupId(groupId)).thenReturn(List.of(mock(UserEntity.class)));
-        when(sessionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(sessionRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
 
         startIn(foreign);
 
-        verify(sessionRepository).save(any());
+        verify(sessionRepository).saveAndFlush(any());
     }
 
     @Test
@@ -303,7 +304,22 @@ class SessionServiceTest {
 
         assertTrue(e.getMessage().contains("уже идёт"));
         verifyNoInteractions(scenarioRepository);
-        verify(sessionRepository, never()).save(any());
+        verify(sessionRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void concurrentStartForSameGroupIsConflict() throws AuthenticationException {
+        UserEntity teacher = user(UUID.randomUUID(), "ROLE_TEACHER");
+        loggedInAs(teacher);
+        StudyGroupEntity group = groupOf(teacher);
+        when(scenarioRepository.findAllById(anyList())).thenReturn(List.of(scenario(approvedId, ScenarioStatus.APPROVED)));
+        when(studyGroupMemberRepository.findUsersByGroupId(groupId)).thenReturn(List.of(mock(UserEntity.class)));
+        // проверка existsBy… прошла, но параллельный старт уже вставил занятие — сработал уникальный индекс
+        when(sessionRepository.saveAndFlush(any())).thenThrow(new DataIntegrityViolationException("sessions_one_active_per_group"));
+
+        SessionConflictException e = assertThrows(SessionConflictException.class, () -> startIn(group));
+
+        assertTrue(e.getMessage().contains("уже идёт"));
     }
 
     private SessionEntity activeSession(UserEntity startedBy, StudyGroupEntity group) {

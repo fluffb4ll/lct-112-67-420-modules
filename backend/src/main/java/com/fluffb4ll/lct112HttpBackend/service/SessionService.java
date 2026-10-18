@@ -24,6 +24,7 @@ import com.fluffb4ll.lct112HttpBackend.util.HttpRequestUtil;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -100,7 +101,13 @@ public class SessionService {
                 minInterval,
                 maxInterval
         );
-        SessionEntity savedSession = sessionRepository.save(session);
+        SessionEntity savedSession;
+        try {
+            // flush сразу: одновременный старт для той же группы упрётся в sessions_one_active_per_group
+            savedSession = sessionRepository.saveAndFlush(session);
+        } catch (DataIntegrityViolationException e) {
+            throw new SessionConflictException("Для этой группы уже идёт занятие — сначала завершите его");
+        }
 
         auditService.logAction(
                 currentUser.getId(),

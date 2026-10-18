@@ -20,7 +20,7 @@ import { BACKEND_PERMISSIONS, roleLabel, type DepartmentDto, type UserInfoDto } 
 import { describeError } from '../../api/errors';
 import { isPermissionDenied } from '../../api/http';
 import { useMe } from '../../store/session';
-import { Badge, Button, Checkbox, ConfirmModal, Input, Modal, Notice, Panel, Select, Table } from '../../ui';
+import { Badge, Button, ConfirmModal, Input, Modal, Notice, Panel, Select, Table } from '../../ui';
 
 /*
  * Учётные записи — через бэкенд (/api/admin/users/*): список страницами, создание,
@@ -235,9 +235,9 @@ export function Users() {
         <PasswordModal
           target={pwdFor}
           onClose={() => setPwdFor(null)}
-          onSave={(password, mustChange) => {
+          onSave={(password) => {
             setPwdFor(null);
-            void run(() => updateUser({ userId: pwdFor.id, password, mustChangePassword: mustChange }), `Пароль ${pwdFor.fullName} изменён`);
+            void run(() => updateUser({ userId: pwdFor.id, password }), `Пароль ${pwdFor.fullName} изменён`);
           }}
         />
       )}
@@ -428,9 +428,8 @@ function CreateUser({
   );
 }
 
-function PasswordModal({ target, onClose, onSave }: { target: UserTableRow; onClose: () => void; onSave: (password: string, mustChange: boolean) => void }) {
+function PasswordModal({ target, onClose, onSave }: { target: UserTableRow; onClose: () => void; onSave: (password: string) => void }) {
   const [pwd, setPwd] = useState('');
-  const [mustChange, setMustChange] = useState(true);
   const [err, setErr] = useState('');
   return (
     <Modal
@@ -444,7 +443,7 @@ function PasswordModal({ target, onClose, onSave }: { target: UserTableRow; onCl
           <Button
             variant="success"
             className="h-10 px-4 text-[15px] font-bold"
-            onClick={() => (RULES.password.test(pwd) ? onSave(pwd, mustChange) : setErr('Пароль: не короче 8 символов, обязательно латинские буквы и цифры'))}
+            onClick={() => (RULES.password.test(pwd) ? onSave(pwd) : setErr('Пароль: не короче 8 символов, обязательно латинские буквы и цифры'))}
           >
             сохранить
           </Button>
@@ -454,9 +453,6 @@ function PasswordModal({ target, onClose, onSave }: { target: UserTableRow; onCl
       <div className="flex flex-col gap-3">
         {err && <Notice tone="bad">{err}</Notice>}
         <Input label="Новый пароль" type="password" value={pwd} onChange={(e) => setPwd(e.target.value)} autoComplete="new-password" />
-        <Checkbox checked={mustChange} onChange={setMustChange}>
-          Потребовать сменить пароль при следующем входе
-        </Checkbox>
       </div>
     </Modal>
   );
