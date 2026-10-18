@@ -18,7 +18,7 @@ import { AttemptDetails } from '../shared/AttemptDetails';
 import { Handbook } from './Handbook';
 import { ServerLesson } from './ServerLesson';
 import { ServerProfile } from './ServerProfile';
-import { useAllScenarios, useServerScenariosStatus } from '../../store/serverScenarios';
+import { useAllScenarios, useServerScenarioStore, useServerScenariosStatus } from '../../store/serverScenarios';
 import { useServerScenarios } from './useServerScenarios';
 import { emptyPracticeText } from './practiceEmpty';
 import { scenarioTitle } from '../shared/withdrawn';
@@ -41,6 +41,7 @@ export function StudentHome() {
   const serverIds = useMemo(() => new Set(serverScenarios.map((s) => s.id)), [serverScenarios]);
   const scenarios = useAllScenarios();
   const loadStatus = useServerScenariosStatus();
+  const loadedGroupId = useServerScenarioStore((s) => s.groupId);
 
   const scMap = useMemo(() => new Map(scenarios.map((s) => [s.id, s])), [scenarios]);
   const hasStaleLive = !!user && db.live.some((l) => l.studentId === user.id);
@@ -133,7 +134,7 @@ export function StudentHome() {
 
             <Panel title="Самостоятельная тренировка">
               {recommended.length === 0 ? (
-                <Empty>{emptyPracticeText(!!info && !!groupId, loadStatus)}</Empty>
+                <Empty>{emptyPracticeText(info ? groupId : undefined, loadStatus, loadedGroupId)}</Empty>
               ) : (
                 <p className="text-sm text-c-muted">
                   ИИ подобрал карточки по вашему самому слабому навыку — <b className="text-c-text">«{SKILL_LABELS[weak]}»</b>, сложность {diff}. {SKILL_ADVICE[weak]}
