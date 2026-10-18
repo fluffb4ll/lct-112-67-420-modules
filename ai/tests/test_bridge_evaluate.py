@@ -367,3 +367,60 @@ def test_route_falls_back_to_rules_when_judge_crashes(monkeypatch):
     c = TestClient(service.create_app(llm=FakeLLM(lambda _: "{}"), judge=None))
     r = c.post("/api/v1/ai/evaluate", json=request(run(GOOD)))
     assert r.status_code == 200 and r.json()["evaluatedBy"] == "rules"
+
+
+def judge_says(summary, remarks=()):
+    return FakeLLM(
+        lambda _: json.dumps(
+            {"comment_score": 0, "remarks": list(remarks), "summary": summary}, ensure_ascii=False
+        )
+    )
+
+
+def test_llm_praise_of_status_rules_zeroed_is_dropped():
+    # на стенде: 0 за первичный статус, а разбор ИИ — «верно выбрали статусы»
+    events = run(GOOD)
+    events[2]["status"] = "Принята"
+    llm = judge_says(
+        "Вы верно выбрали статусы и своевременно открыли карточку.",
+        ["Статусы проставлены правильно.", "Проставьте «Не принята»: объект обслуживает УК."],
+    )
+    out = evaluate_card(request(events), llm)
+    text = out["aiRecommendations"]
+    assert {c["id"]: c for c in out["checks"]}["primary_status"]["points"] == 0
+    assert "верно выбрали статусы" not in text and "проставлены правильно" not in text
+    assert "Проставьте «Не принята»" in text
+    # снятые баллы модель видит в промпте
+    assert "Правильный первичный статус: 0 из" in llm.prompts[0]
+
+
+def test_llm_praise_of_what_rules_credited_is_kept():
+    llm = judge_says("Вы верно выбрали статус и полно заполнили комментарий.")
+    out = evaluate_card(request(run(GOOD)), llm)
+    assert "Вы верно выбрали статус" in out["aiRecommendations"]
+    assert "ПРОВЕРКА ПО ПРАВИЛАМ" not in llm.prompts[0]
+
+
+def test_generic_praise_is_dropped_when_failed():
+    events = run(GOOD)
+    events[2]["status"] = "Принята"
+    out = evaluate_card(request(events), judge_says("Вы отлично справились с карточкой."))
+    assert "справились" not in out["aiRecommendations"]
+    # от разбора ничего не осталось — шаблон по правилам
+    assert "Разбор: Обратите внимание" in out["aiRecommendations"]
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Вы неверно выбрали статус.",
+        "Статус выбран не верно, нужно «Не принята».",
+        "Нужно правильно выбирать статус по зоне ответственности.",
+        "Вы правильно назвали адрес, но статус выбран неверно.",
+    ],
+)
+def test_criticism_and_advice_about_zeroed_check_are_kept(sentence):
+    events = run(GOOD)
+    events[2]["status"] = "Принята"
+    out = evaluate_card(request(events), judge_says(sentence))
+    assert sentence in out["aiRecommendations"]

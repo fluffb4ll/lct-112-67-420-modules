@@ -26,6 +26,11 @@
 Выбрасываются предложения с латиницей или служебными знаками ({}[]<>"_), с корнями
 `FEEDBACK_JUNK_ROOTS`, со словом, повторённым 3+ раз, короче двух русских слов, и повторы
 уже сказанного. Если от разбора ничего не осталось — шаблон по правилам («Разбор: …»).
+
+Ещё модель хвалит то, за что правила сняли баллы («Вы верно выбрали статус» при 0 за первичный
+статус): ей в промпте перечислены снятые баллы, а из разбора выбрасываются предложения, где часть
+без отрицания хвалит тему проверки, набравшей меньше половины (`_contradicts_rules`), и общая
+похвала («отлично справились») при незачёте.
 """
 
 from __future__ import annotations
@@ -182,15 +187,103 @@ def _sentences(text: str) -> list[str]:
     return out
 
 
-def _clean_feedback(summary: Any, remarks: Any) -> tuple[str, list[str]]:
-    """Разбор модели без мусора: (итог, замечания). Пустые — если ничего годного не осталось."""
+# о чём проверка — корни слов, которыми модель о ней пишет
+CHECK_TOPIC_ROOTS = {
+    "open_time": (
+        "открыл",
+        "открыт",
+        "своевремен",
+        "быстр",
+        "сразу",
+        "время",
+        "времен",
+        "норматив",
+    ),
+    "primary_status": ("статус",),
+    "path": ("статус",),
+    "comment_required": ("комментар",),
+    "comment_content": ("комментар", "сведени"),
+    "report_call": ("доклад", "доложил", "руководител"),
+    "total_time": ("время", "времен", "норматив", "уложил", "быстр"),
+    "literacy": ("грамот", "орфограф", "ошибок", "ошибк"),
+}
+PRAISE_ROOTS = (
+    "верн",
+    "верен",
+    "правильн",
+    "корректн",
+    "хорош",
+    "отличн",
+    "успешн",
+    "грамотн",
+    "точн",
+    "полн",
+    "своевремен",
+    "молодец",
+    "справил",
+    "уложил",
+    "соблюд",
+    "четк",
+    "чётк",
+)
+# похвала всей работе — неуместна при незачёте
+GENERIC_PRAISE = (
+    "справил",
+    "молодец",
+    "всё верно",
+    "все верно",
+    "всё правильно",
+    "все правильно",
+    "без ошибок",
+    "безошибоч",
+    "отличн",
+    "по регламенту",
+    "хорошая работа",
+    "хорошо поработ",
+    "успешн",
+)
+NEGATIONS = {"не", "нет", "ни", "без", "нужно", "надо", "следует", "стоит", "забыли"}
+
+
+def _clauses(sentence: str) -> list[str]:
+    return [c for c in re.split(r"[,;:—–]|\s(?:но|а|однако|хотя)\s", sentence.lower()) if c.strip()]
+
+
+def _contradicts_rules(sentence: str, weak_topics: tuple[str, ...], failed: bool) -> bool:
+    """Предложение хвалит то, за что правила сняли баллы, или всю работу при незачёте.
+
+    Смотрим по частям предложения: часть с отрицанием или советом («не», «нужно») — не похвала.
+    """
+    for clause in _clauses(sentence):
+        words = _ru_words(clause)
+        if NEGATIONS & set(words):
+            continue
+        if failed and any(g in clause for g in GENERIC_PRAISE):
+            return True
+        praises = any(w.startswith(PRAISE_ROOTS) and not w.startswith("не") for w in words)
+        if praises and any(t in clause for t in weak_topics):
+            return True
+    return False
+
+
+def _clean_feedback(
+    summary: Any, remarks: Any, rr: RuleResult | None = None, passed: bool = True
+) -> tuple[str, list[str]]:
+    """Разбор модели без мусора и без похвалы вопреки правилам: (итог, замечания).
+
+    Пустые — если ничего годного не осталось.
+    """
     seen: set[tuple[str, ...]] = set()
+    weak = [c for c in rr.checks if c.points * 2 < c.max] if rr else []
+    weak_topics = tuple({r for c in weak for r in CHECK_TOPIC_ROOTS.get(c.id, ())})
 
     def keep(text: Any) -> list[str]:
         out = []
         for sentence in _sentences(" ".join(str(text or "").split())):
             key = tuple(_ru_words(sentence))
             if not sentence or _junk(sentence) or key in seen:
+                continue
+            if _contradicts_rules(sentence, weak_topics, not passed):
                 continue
             seen.add(key)
             out.append(sentence)
@@ -253,6 +346,14 @@ def _judge_prompt(
         "Комментарии: <<<" + (_student_text("; ".join(rr.facts.comments)) or "нет") + ">>>",
         f"Доклад руководителю: <<<{_student_text(rr.facts.report) or 'не было'}>>>",
         "",
+    ]
+    lost = [c for c in rr.checks if c.points < c.max]
+    if lost:
+        lines.append("ПРОВЕРКА ПО ПРАВИЛАМ — здесь баллы сняты, не хвали это, а объясни ошибку:")
+        # без подробностей: короче промпт на CPU, и корни фактов доклада не подсказываем модели
+        lines.extend(f"— {c.title}: {c.points} из {c.max}" for c in lost)
+        lines.append("")
+    lines += [
         "Ответь полями:",
         "comment_score — 0–10, насколько комментарии передают те же сведения, что эталон "
         "(смысл важнее точных слов; 0, если комментариев нет);",
@@ -417,7 +518,9 @@ def evaluate_card(request: dict[str, Any], llm: LLMProvider | None) -> dict[str,
         f"Итог: {score} из 100 — {'зачёт' if passed else 'незачёт'}.",
     ]
     if verdict is not None:
-        summary, remarks = _clean_feedback(verdict.get("summary"), verdict.get("remarks"))
+        summary, remarks = _clean_feedback(
+            verdict.get("summary"), verdict.get("remarks"), rr, passed
+        )
         if summary or remarks:
             # итог мог целиком уйти в мусор — тогда без пустого «Разбор ИИ:», только замечания
             text.append(f"Разбор ИИ: {summary}" if summary else "Замечания ИИ:")
