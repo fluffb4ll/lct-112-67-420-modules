@@ -10,12 +10,16 @@ import { evaluationOfCard } from './serverScore';
 
 export type CardEvaluations = Record<string, ServerEvaluation>;
 
-/** Оценки неоценённых карточек; карточка, по которой запрос не удался или оценки нет, в ответ не попадает */
+/**
+ * Оценки неоценённых карточек (all — всех: нужны балл и комментарий преподавателя);
+ * карточка, по которой запрос не удался или оценки нет, в ответ не попадает
+ */
 export async function loadCardEvaluations(
   cards: Pick<CardSummary, 'id' | 'status'>[],
   load: (cardId: string) => Promise<ServerEvaluation | null> = async (id) => evaluationOfCard(await getCard(id)),
+  all = false,
 ): Promise<CardEvaluations> {
-  const ids = cards.filter((c) => c.status !== 'EVALUATED').map((c) => c.id);
+  const ids = cards.filter((c) => all || c.status !== 'EVALUATED').map((c) => c.id);
   const res = await Promise.allSettled(ids.map((id) => load(id)));
   const out: CardEvaluations = {};
   res.forEach((r, i) => {
@@ -25,7 +29,7 @@ export async function loadCardEvaluations(
 }
 
 /** То же как хук: перезапрашивает при смене набора карточек и их статусов */
-export function useCardEvaluations(cards: Pick<CardSummary, 'id' | 'status'>[] | undefined): CardEvaluations {
+export function useCardEvaluations(cards: Pick<CardSummary, 'id' | 'status'>[] | undefined, all = false): CardEvaluations {
   const [evals, setEvals] = useState<CardEvaluations>({});
   const key = (cards ?? []).map((c) => `${c.id}:${c.status}`).join(',');
 
@@ -36,11 +40,11 @@ export function useCardEvaluations(cards: Pick<CardSummary, 'id' | 'status'>[] |
       const [id, status] = s.split(':');
       return { id, status: status as CardSummary['status'] };
     });
-    void loadCardEvaluations(list).then((e) => alive && setEvals(e));
+    void loadCardEvaluations(list, undefined, all).then((e) => alive && setEvals(e));
     return () => {
       alive = false;
     };
-  }, [key]);
+  }, [key, all]);
 
   return evals;
 }

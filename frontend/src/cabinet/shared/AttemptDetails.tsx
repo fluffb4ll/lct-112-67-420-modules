@@ -6,7 +6,7 @@ import { dateTime } from '../../domain/format';
 import { SKILL_LABELS } from '../../domain/skills';
 import type { Attempt } from '../../domain/types';
 import { attemptVerdict } from '../../training/serverScore';
-import { useServerScore } from '../../training/useServerScore';
+import { useServerEvaluation } from '../../training/useServerScore';
 import { Badge, Button, Input, Modal, Notice, Textarea } from '../../ui';
 import { cx } from '../../ui/cx';
 import { isWithdrawn, scenarioTitle } from './withdrawn';
@@ -27,8 +27,11 @@ export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attemp
   const [saved, setSaved] = useState(false);
   const student = users.find((u) => u.id === attempt.studentId);
   // попытка сдана в серверном занятии: итог — оценка на сервере, локальный балл — предварительный
-  const server = useServerScore(attempt.serverCardId);
+  const loaded = useServerEvaluation(attempt.serverCardId);
+  const server = loaded?.view ?? null;
   const passed = attemptVerdict(attempt, server);
+  // комментарий преподавателя к серверной карточке — с сервера; локальный отзыв — для попыток без сервера
+  const teacherComment = loaded?.ev?.teacherComment?.trim() || attempt.review?.comment;
 
   const EVENT_LABELS: Record<string, string> = {
     arrived: 'Поступила карточка',
@@ -55,13 +58,24 @@ export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attemp
         <span>{dateTime(attempt.startedAt)}</span>
         <span>· карточка № {attempt.incidentId}</span>
         {passed !== null && <Badge tone={passed ? 'ok' : 'bad'}>{passed ? 'Зачёт' : 'Незачёт'}</Badge>}
-        {ev && <b className="text-c-text">{attempt.review?.score ?? ev.score} баллов</b>}
-        {attempt.review?.score !== undefined && ev && attempt.review.score !== ev.score && <span>(авто: {ev.score})</span>}
-        {server && (
-          <span>
-            · {server.kind === 'score' ? <b className="text-c-text">{server.score} — {server.label}</b> : server.label}
-            {ev && ' (баллы выше — предварительно по правилам)'}
-          </span>
+        {server?.kind === 'score' ? (
+          <>
+            <b className="text-c-text">
+              {server.score} баллов — {server.label}
+            </b>
+            {ev && <span>(по правилам тренажёра: {ev.score})</span>}
+          </>
+        ) : (
+          <>
+            {ev && <b className="text-c-text">{attempt.review?.score ?? ev.score} баллов</b>}
+            {attempt.review?.score !== undefined && ev && attempt.review.score !== ev.score && <span>(авто: {ev.score})</span>}
+            {server && (
+              <span>
+                · {server.label}
+                {ev && ' (баллы выше — предварительно по правилам)'}
+              </span>
+            )}
+          </>
         )}
       </div>
       {isWithdrawn(sc, loadStatus) && (
@@ -114,10 +128,10 @@ export function AttemptDetails({ attempt, onClose, reviewer }: { attempt: Attemp
         </div>
       )}
 
-      {attempt.review && !reviewer && (
+      {teacherComment && !reviewer && (
         <div className="mt-4">
           <Notice tone="neutral">
-            <b>Комментарий преподавателя:</b> {attempt.review.comment}
+            <b>Комментарий преподавателя:</b> <span className="whitespace-pre-line">{teacherComment}</span>
           </Notice>
         </div>
       )}

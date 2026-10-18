@@ -1,22 +1,35 @@
 import { useEffect, useState } from 'react';
-import { getCard } from '../api/sessions';
+import { getCard, type Evaluation as ServerEvaluation } from '../api/sessions';
 import { pollUntil } from './pollUntil';
 import { evaluationOfCard, serverScoreView, type ServerScoreView } from './serverScore';
 
-/** Оценка сданной карточки с сервера. Пока ИИ оценивает — опрашивает GET /api/cards/{id} с затуханием (pollUntil). Без id — null. */
-export function useServerScore(cardId: string | undefined): ServerScoreView | null {
-  const [view, setView] = useState<{ cardId: string; view: ServerScoreView } | null>(null);
+type Loaded = { view: ServerScoreView; ev: ServerEvaluation | null };
+
+/**
+ * Оценка сданной карточки с сервера вместе с её отображением (балл, комментарий преподавателя).
+ * Пока ИИ оценивает — опрашивает GET /api/cards/{id} с затуханием (pollUntil). Без id — null.
+ */
+export function useServerEvaluation(cardId: string | undefined): Loaded | null {
+  const [state, setState] = useState<{ cardId: string } & Loaded>();
 
   useEffect(() => {
     if (!cardId) return;
     return pollUntil({
-      load: async () => serverScoreView(evaluationOfCard(await getCard(cardId))),
-      isDone: (next) => next.kind !== 'pending',
-      onValue: (next) => setView({ cardId, view: next }),
-      onGiveUp: () => setView({ cardId, view: { kind: 'unavailable', label: 'Оценка ИИ пока не готова — посмотрите позже в кабинете' } }),
+      load: async (): Promise<Loaded> => {
+        const ev = evaluationOfCard(await getCard(cardId));
+        return { view: serverScoreView(ev), ev };
+      },
+      isDone: (next) => next.view.kind !== 'pending',
+      onValue: (next) => setState({ cardId, ...next }),
+      onGiveUp: () => setState({ cardId, ev: null, view: { kind: 'unavailable', label: 'Оценка ИИ пока не готова — посмотрите позже в кабинете' } }),
     });
   }, [cardId]);
 
   if (!cardId) return null;
-  return view?.cardId === cardId ? view.view : { kind: 'pending', label: 'оценка ИИ готовится…' };
+  return state?.cardId === cardId ? state : { view: { kind: 'pending', label: 'оценка ИИ готовится…' }, ev: null };
+}
+
+/** Только отображение оценки: цифра и подпись */
+export function useServerScore(cardId: string | undefined): ServerScoreView | null {
+  return useServerEvaluation(cardId)?.view ?? null;
 }
