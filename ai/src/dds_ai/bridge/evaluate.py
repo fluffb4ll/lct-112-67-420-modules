@@ -262,22 +262,31 @@ CRITIQUE_ROOTS = (
 # «ошибок нет», «без ошибок», «не допустили ни одной ошибки» — похвала, хоть и с отрицанием;
 # отсутствие — в родительном падеже: «не было указано нарушение» — упрёк
 _FAULT = r"(?:ошибок|ошибки|нарушений|нарушения|замечаний|замечания)\b"
+_NONE = r"(?:ни\s+одн\w*|ни\s+един\w*|никак\w*)"
 # между «не допустили» и «ошибок» — только «ни одной», «никаких», «грубых»
-_QUANTIFIERS = r"(?:ни\s+одн\w*\s+|никак\w*\s+|\w+(?:ых|их)\s+){0,2}"
-_NOT_FOUND = (
-    r"не\s+(?:допустил\w*|допускал\w*|допущен\w*|было|выявлен\w*|обнаружен\w*"
-    r"|найден\w*|замечен\w*|сделал\w*)"
-)
+_QUANTIFIERS = rf"(?:{_NONE}\s+|\w+(?:ых|их)\s+){{0,2}}"
+_FOUND = r"(?:допустил|допускал|допущен|выявлен|обнаружен|найден|замечен|сделал)\w*"
+# «ошибок … не было» и «ошибок … нет» — только в конце: «не было исправлено» — упрёк
+_END = r"(?!\s*[а-яё])"
 NO_FAULTS = re.compile(
-    rf"\b(?:нет|без|ни\s+одн\w*|никак\w*)\s+{_FAULT}"
-    rf"|\b{_NOT_FOUND}\s+{_QUANTIFIERS}{_FAULT}"
-    rf"|\b{_FAULT}\s+(?:\w+\s+){{0,2}}?(?:нет\b|{_NOT_FOUND})"
+    rf"\b(?:нет|без|{_NONE})\s+{_FAULT}"
+    rf"|\bне\s+(?:было|(?:было\s+)?{_FOUND})\s+{_QUANTIFIERS}{_FAULT}"
+    rf"|\b{_FAULT}\s+(?:\w+\s+){{0,2}}?(?:нет{_END}|не\s+(?:было\s+)?{_FOUND}|не\s+было{_END})"
 )
 # цитаты: статус «Не принята», текст комментария «Не обслуживаем…» — не мнение модели
 QUOTED = re.compile(r"«[^»]*»|\"[^\"]*\"|“[^”]*”")
 ALL_TOPICS = tuple({r for roots in CHECK_TOPIC_ROOTS.values() for r in roots})
 # повелительное наклонение — совет на будущее: «проверяйте», «не допускайте», «укажите»
 IMPERATIVE_ENDINGS = ("йте", "ьте", "ите", "йтесь", "ьтесь", "итесь")
+# «о защите», «на сайте», «вы звоните» — не повелительное наклонение
+NOT_IMPERATIVE_BEFORE = {"в", "во", "на", "о", "об", "при", "по", "вы"}
+
+
+def _advises(words: list[str]) -> bool:
+    return any(
+        w.endswith(IMPERATIVE_ENDINGS) and (i == 0 or words[i - 1] not in NOT_IMPERATIVE_BEFORE)
+        for i, w in enumerate(words)
+    )
 
 
 def _critique(words: list[str]) -> bool:
@@ -331,7 +340,7 @@ def _criticizes_passed(
         return False
     for clause in _clauses(QUOTED.sub(" ", sentence)):
         words = _ru_words(NO_FAULTS.sub(" ", clause))
-        if any(w.endswith(IMPERATIVE_ENDINGS) for w in words):
+        if _advises(words):
             continue
         critique = _critique(words)
         # тема — в другом слове: «ошибка» сама по себе не упрёк грамотности
