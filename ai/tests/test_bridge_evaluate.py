@@ -95,6 +95,22 @@ def test_lost_points_recommend_weakest_skill():
     assert "Рекомендация: подтяните навык «Зона ответственности»" in out["aiRecommendations"]
 
 
+def test_near_full_score_advises_without_reproach():
+    events = run(GOOD)
+    events[1]["t"] = 45_000  # карточку открыли позже нормы — минус только за время
+    out = evaluate_card(request(events), None)
+    assert 90 <= out["aiScore"] < 100 and out["passed"] is True
+    assert "подтяните" not in out["aiRecommendations"]
+    assert "для закрепления — навык «Нормативы времени»" in out["aiRecommendations"]
+
+
+def test_full_score_never_names_first_scenario_skill():
+    # первый навык сценария — «zone»; при 100/100 он не должен всплывать в рекомендации
+    out = evaluate_card(request(run(GOOD)), None)
+    rec = next(line for line in out["aiRecommendations"].splitlines() if "Рекомендация" in line)
+    assert "Зона ответственности" not in rec
+
+
 def test_wrong_status_is_failed_and_explained():
     events = run(GOOD)
     events[2]["status"] = "Принята"
