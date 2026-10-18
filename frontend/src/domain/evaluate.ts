@@ -18,6 +18,8 @@ export interface Norms {
 }
 
 export const DEFAULT_NORMS: Norms = { openSec: 30, totalSec: 180, passScore: 70 };
+/** От этого балла при зачёте рекомендация без упрёка — только для закрепления (как NEAR_FULL_SCORE в ai) */
+const NEAR_FULL_SCORE = 90;
 
 function lcs(a: string[], b: string[]): number {
   const dp = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
@@ -111,7 +113,15 @@ export function evaluateDds(
     const { hit, missing } = matchGroups(allComments, exp.commentMustMention);
     const total = exp.commentMustMention.length;
     const points = total === 0 ? max : pyRound((hit / total) * max);
-    const skill: Skill = scenario.skills.includes('refusal_comment') ? 'refusal_comment' : scenario.skills.includes('work_progress') ? 'work_progress' : 'profile';
+    // неполный комментарий — не «Профильные происшествия»: при верном «Принята» это ход работ (как в ai)
+    const want: ResponseStatus = exp.path[0] ?? 'Принята';
+    const skill: Skill = scenario.skills.includes('refusal_comment')
+      ? 'refusal_comment'
+      : scenario.skills.includes('work_progress')
+        ? 'work_progress'
+        : COMMENT_REQUIRED.includes(want)
+          ? 'refusal_comment'
+          : 'work_progress';
     const detail =
       total === 0
         ? 'Особых требований к тексту нет'
@@ -188,7 +198,9 @@ export function evaluateDds(
 
   // Главная ошибка — проверка с наибольшей потерей баллов
   const worst = [...checks].sort((a, b) => b.max - b.points - (a.max - a.points))[0];
-  const weak: Skill = worst && worst.points < worst.max ? worst.skill : scenario.skills[0] ?? 'timing';
+  // при полном балле слабого навыка нет — не советуем «подтянуть» первый навык сценария (как в ai)
+  const hasWeak = !!worst && worst.points < worst.max;
+  const weak: Skill = hasWeak ? worst.skill : scenario.skills[0] ?? 'timing';
 
   const summary =
     score >= 90
@@ -212,7 +224,11 @@ export function evaluateDds(
     summary,
     recommendation: {
       skill: weak,
-      text: `Подтяните навык «${SKILL_LABELS[weak]}». ${SKILL_ADVICE[weak]}`,
+      text: !hasWeak
+        ? 'Замечаний нет — переходите к сценариям сложнее.'
+        : passed && score >= NEAR_FULL_SCORE
+          ? `Результат почти полный; для закрепления — навык «${SKILL_LABELS[weak]}». ${SKILL_ADVICE[weak]}`
+          : `Подтяните навык «${SKILL_LABELS[weak]}». ${SKILL_ADVICE[weak]}`,
       nextScenarioId: pickNext(weak),
     },
     predicted,
