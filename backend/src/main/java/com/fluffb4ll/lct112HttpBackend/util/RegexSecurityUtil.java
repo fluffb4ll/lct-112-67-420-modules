@@ -10,7 +10,7 @@ public class RegexSecurityUtil {
     private static final Pattern NICKNAME_PATTERN =
             Pattern.compile("^[A-Za-z_.\\d-]{1,16}$");
     private static final Pattern FULLNAME_PATTERN =
-            Pattern.compile("^[A-Za-zА-Яа-я ']{1,150}$");
+            Pattern.compile("^[A-Za-zА-Яа-яЁё '-]{1,150}$");
 
     private static final String LOWERCASE = "abcdefghijklmnopqrstuvwxyz";
     private static final String UPPERCASE = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";

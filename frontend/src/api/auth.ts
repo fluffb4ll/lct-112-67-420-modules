@@ -77,6 +77,18 @@ const ROLE_MAP: Record<string, string> = {
   TRAINEE: 'student',
 };
 
+const ROLE_LABELS: Record<string, string> = {
+  ROLE_ADMIN: 'Администратор',
+  ROLE_TEACHER: 'Преподаватель',
+  ROLE_STUDENT: 'Обучающийся',
+};
+
+/** Роль для таблиц и карточек: технические коды не показываем пользователю. */
+export function roleLabel(role: string): string {
+  const code = role.trim().toUpperCase();
+  return ROLE_LABELS[code] ?? role;
+}
+
 export function roleIdFor(backendRole: string): string {
   const code = backendRole.trim().toUpperCase().replace(/^ROLE_/, '');
   if (ROLE_MAP[code]) return ROLE_MAP[code];

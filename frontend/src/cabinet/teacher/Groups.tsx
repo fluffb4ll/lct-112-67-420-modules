@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { PageResponse, UserTableRow } from '../../api/admin';
 import { describeError } from '../../api/errors';
+import { roleLabel } from '../../api/auth';
 import {
   addGroupMember,
   createStudyGroup,
@@ -351,7 +352,7 @@ function MembersModal({ group, canEdit, onClose }: { group: StudyGroupRow; canEd
                 <tr key={u.id}>
                   <td>{u.fullName}</td>
                   <td className="font-mono text-[13px]">{u.username}</td>
-                  <td className="text-[13px] text-c-muted">{u.role}</td>
+                  <td className="text-[13px] text-c-muted">{roleLabel(u.role)}</td>
                   <td>
                     {canEdit && (
                       <div className="flex justify-end">
