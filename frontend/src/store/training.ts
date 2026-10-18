@@ -11,7 +11,6 @@ import { serviceById } from '../data/services';
 import { deriveDemo, eventsToDemo, stepMatches } from '../domain/demo';
 import { DEFAULT_NORMS, evaluateDds, type Norms } from '../domain/evaluate';
 import { computeRatings, predictSuccess, recommendDifficulty } from '../domain/skills';
-import { TERMINAL } from '../domain/statusMachine';
 import type {
   DdsService,
   DemoStep,
@@ -396,7 +395,7 @@ export const useRun = create<RunState>((set, get) => {
           blip();
         }, input.delaySec * 1000);
       }
-      if (TERMINAL.includes(st.status)) later(() => get().finishCard(), 1200);
+      // итоговый статус карточку не закрывает: после него — доклад руководителю, затем «Завершить карточку»
     },
 
     callStarted: (contactId) => {

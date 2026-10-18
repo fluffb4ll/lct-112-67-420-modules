@@ -34,4 +34,18 @@ describe('loadCardEvaluations', () => {
     );
     expect(Object.keys(res)).toEqual(['z']);
   });
+
+  it('all — запрашивает и оценённые карточки: нужны балл и комментарий преподавателя', async () => {
+    const load = vi.fn(async (id: string) => ev(id, 'OK'));
+    const res = await loadCardEvaluations(
+      [
+        { id: 'a', status: 'EVALUATED' },
+        { id: 'b', status: 'SUBMITTED' },
+      ],
+      load,
+      true,
+    );
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(Object.keys(res).sort()).toEqual(['a', 'b']);
+  });
 });

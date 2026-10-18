@@ -1,4 +1,5 @@
 import type { CardStatusBackend, Evaluation as ServerEvaluation } from '../api/sessions';
+import { finalScore } from '../domain/analytics';
 import { DEFAULT_NORMS } from '../domain/evaluate';
 import type { Attempt } from '../domain/types';
 
@@ -74,4 +75,31 @@ export function cardStatusBadge(
   if (status === 'EVALUATED') return { tone: 'ok', text: 'оценена' };
   if (view?.kind === 'unavailable') return { tone: 'bad', text: 'оценка ИИ недоступна' };
   return { tone: 'warn', text: 'ждёт оценки' };
+}
+
+/**
+ * Итог попытки для списков и средних: оценка сервера (преподаватель поверх ИИ), пока её нет —
+ * локальный разбор. Комментарий — преподавателя с сервера (или локальный отзыв).
+ * По этой функции считаются и строки таблицы, и средний балл — чтобы цифры совпадали.
+ */
+export function attemptResult(
+  attempt: Pick<Attempt, 'evaluation' | 'review' | 'passScore' | 'serverCardId'>,
+  ev: ServerEvaluation | null | undefined,
+): { score: number; passed: boolean | null; byTeacher: boolean; comment: string | null } {
+  const view = ev ? serverScoreView(ev) : null;
+  const server = view?.kind === 'score' ? view : null;
+  return {
+    score: server ? server.score : finalScore(attempt as Attempt),
+    passed: attemptVerdict(attempt, server),
+    byTeacher: ev?.teacherScore != null || attempt.review?.score !== undefined,
+    comment: ev?.teacherComment?.trim() || attempt.review?.comment || null,
+  };
+}
+
+/**
+ * Разбор ИИ для «Над чем поработать»: без первой строки «Итог: N из 100 — …». Это балл ИИ,
+ * преподаватель мог выставить другой — итоговая цифра показана в таблице карточек.
+ */
+export function withoutAiTotal(text: string): string {
+  return text.replace(/^\s*Итог:[^\n]*(\n|$)/, '').trim();
 }

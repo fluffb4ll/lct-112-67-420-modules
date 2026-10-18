@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Evaluation as ServerEvaluation } from '../api/sessions';
 import type { Attempt } from '../domain/types';
-import { attemptVerdict, cardStatusBadge, evaluationOfCard, PRELIMINARY_LABEL, scoreBadge, serverScoreView, serverStatusLine } from './serverScore';
+import { attemptResult, attemptVerdict, cardStatusBadge, evaluationOfCard, PRELIMINARY_LABEL, scoreBadge, serverScoreView, serverStatusLine, withoutAiTotal } from './serverScore';
 
 const base: ServerEvaluation = {
   id: 'e1',
@@ -125,5 +125,43 @@ describe('cardStatusBadge — статус карточки в списках', 
     // преподаватель выставил балл поверх недоступного ИИ
     expect(cardStatusBadge('EVALUATED', { ...base, aiStatus: 'UNAVAILABLE', teacherScore: 70, finalScore: 70 })).toEqual({ tone: 'ok', text: 'оценена: 70' });
     expect(cardStatusBadge('EVALUATED', undefined)).toEqual({ tone: 'ok', text: 'оценена' });
+  });
+});
+
+describe('attemptResult', () => {
+  const evaluation = { score: 62, passed: false } as Attempt['evaluation'];
+
+  it('оценка преподавателя с сервера — балл, вердикт и комментарий берутся из неё', () => {
+    const ev = { ...base, aiStatus: 'OK' as const, aiScore: 68, teacherScore: 70, finalScore: 70, teacherComment: ' Не забывайте доклад ' };
+    expect(attemptResult({ evaluation, serverCardId: 'c1', passScore: 70 }, ev)).toEqual({ score: 70, passed: true, byTeacher: true, comment: 'Не забывайте доклад' });
+  });
+
+  it('только оценка ИИ — её балл, преподаватель не оценивал', () => {
+    const r = attemptResult({ evaluation, serverCardId: 'c1', passScore: 70 }, { ...base, aiStatus: 'OK', aiScore: 68, finalScore: 68 });
+    expect(r).toEqual({ score: 68, passed: false, byTeacher: false, comment: null });
+  });
+
+  it('серверной оценки нет — локальный разбор и локальный отзыв', () => {
+    expect(attemptResult({ evaluation, review: { by: 'u', at: '', comment: 'ок', score: 80 } }, null)).toEqual({ score: 80, passed: false, byTeacher: true, comment: 'ок' });
+    expect(attemptResult({ evaluation, serverCardId: 'c1' }, base).score).toBe(62);
+  });
+
+  it('средний балл по строкам совпадает с таблицей', () => {
+    const rows = [
+      attemptResult({ evaluation, serverCardId: 'c1' }, { ...base, aiStatus: 'OK', aiScore: 68, teacherScore: 70, finalScore: 70 }),
+      attemptResult({ evaluation, serverCardId: 'c2' }, { ...base, aiStatus: 'OK', aiScore: 90, finalScore: 90 }),
+    ];
+    expect(rows.map((r) => r.score)).toEqual([70, 90]);
+  });
+});
+
+describe('withoutAiTotal', () => {
+  it('срезает первую строку «Итог: …» и сохраняет переносы', () => {
+    expect(withoutAiTotal('Итог: 68 из 100 — незачёт.\nРазбор ИИ: мало деталей.\n— адрес неполный')).toBe('Разбор ИИ: мало деталей.\n— адрес неполный');
+  });
+
+  it('текст без «Итог:» не трогает; только итог — пусто', () => {
+    expect(withoutAiTotal('Уточняйте адрес.')).toBe('Уточняйте адрес.');
+    expect(withoutAiTotal('Итог: 90 из 100 — зачёт.')).toBe('');
   });
 });
