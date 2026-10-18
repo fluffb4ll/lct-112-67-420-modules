@@ -20,6 +20,7 @@ import { ServerLesson } from './ServerLesson';
 import { ServerProfile } from './ServerProfile';
 import { useAllScenarios, useServerScenariosStatus } from '../../store/serverScenarios';
 import { useServerScenarios } from './useServerScenarios';
+import { emptyPracticeText } from './practiceEmpty';
 import { scenarioTitle } from '../shared/withdrawn';
 
 /*
@@ -132,7 +133,7 @@ export function StudentHome() {
 
             <Panel title="Самостоятельная тренировка">
               {recommended.length === 0 ? (
-                <Empty>Карточек для тренировки пока нет: они появятся, когда преподаватель назначит занятия вашей группе.</Empty>
+                <Empty>{emptyPracticeText(!!info && !!groupId, loadStatus)}</Empty>
               ) : (
                 <p className="text-sm text-c-muted">
                   ИИ подобрал карточки по вашему самому слабому навыку — <b className="text-c-text">«{SKILL_LABELS[weak]}»</b>, сложность {diff}. {SKILL_ADVICE[weak]}
