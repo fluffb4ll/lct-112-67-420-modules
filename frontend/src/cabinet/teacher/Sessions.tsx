@@ -276,11 +276,13 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
 }
 
 /** Карточка занятия: сданные работы, оценка ИИ и выставление оценки преподавателем */
-function SessionModal({ id, onClose }: { id: string; onClose: () => void }) {
+/** Сданные работы занятия; studentId — только работы одного обучающегося (мониторинг) */
+export function SessionModal({ id, onClose, studentId }: { id: string; onClose: () => void; studentId?: string }) {
   const [data, setData] = useState<SessionDetails | null>(null);
   const [err, setErr] = useState('');
   const [scoreFor, setScoreFor] = useState<CardSummary | null>(null);
-  const evals = useCardEvaluations(data?.cards);
+  const cards = data?.cards.filter((c) => !studentId || c.studentId === studentId);
+  const evals = useCardEvaluations(cards);
 
   const load = useCallback(
     () =>
@@ -304,7 +306,7 @@ function SessionModal({ id, onClose }: { id: string; onClose: () => void }) {
 
   return (
     <Modal
-      title={data ? `Занятие: ${data.studyGroupName ?? ''}` : 'Занятие'}
+      title={data ? `Занятие: ${data.studyGroupName ?? ''}${studentId && cards?.[0] ? ` · ${cards[0].studentName ?? ''}` : ''}` : 'Занятие'}
       width={760}
       onClose={onClose}
       footer={
@@ -316,8 +318,8 @@ function SessionModal({ id, onClose }: { id: string; onClose: () => void }) {
       <div className="flex flex-col gap-3">
         {err && <Notice tone="bad">{err}</Notice>}
         {!data && !err && <Notice tone="neutral">Загрузка…</Notice>}
-        {data && !data.cards.length && <Notice tone="neutral">Сданных работ пока нет.</Notice>}
-        {data && !!data.cards.length && (
+        {cards && !cards.length && <Notice tone="neutral">Сданных работ пока нет.</Notice>}
+        {cards && !!cards.length && (
           <Table>
             <thead>
               <tr>
@@ -330,7 +332,7 @@ function SessionModal({ id, onClose }: { id: string; onClose: () => void }) {
               </tr>
             </thead>
             <tbody>
-              {data.cards.map((c) => (
+              {cards.map((c) => (
                 <tr key={c.id}>
                   <td>{c.studentName ?? c.studentId}</td>
                   <td className="text-[13px]">{c.scenarioTitle ?? '—'}</td>

@@ -1,31 +1,53 @@
-import { useState } from 'react';
-import { sendMessage } from '../../api';
-import { useDb } from '../../api/db';
+import { useEffect, useState } from 'react';
+import { describeError } from '../../api/errors';
+import { getSession, listSessions, type SessionDetails, type SessionDto } from '../../api/sessions';
+import { getStudyGroup } from '../../api/teacher';
 import { useNow } from '../../app/hooks';
-import { finalScore } from '../../domain/analytics';
-import { mmss } from '../../domain/format';
-import type { Attempt, TrainingSession, User } from '../../domain/types';
+import { dateTime, mmss } from '../../domain/format';
 import { useMe } from '../../store/session';
-import { MODE_LABELS } from '../../training/labels';
-import { Badge, Button, Empty, Modal, Notice, Panel, Select, Table, Textarea } from '../../ui';
-import { cx } from '../../ui/cx';
-import { AttemptDetails } from '../shared/AttemptDetails';
+import { useCardEvaluations } from '../../training/cardEvaluations';
+import { Badge, Button, Empty, Notice, Panel, Select, Table } from '../../ui';
+import { monitorRows } from './monitorRows';
+import { SessionModal } from './Sessions';
 
 /*
- * Мониторинг занятия в реальном времени: кто на какой карточке, сколько прошло времени,
- * какой статус проставлен, идёт ли доклад. Обратная связь обучающемуся и экспертная оценка.
- * В мок-режиме обновление приходит из других вкладок браузера; на сервере — через WebSocket.
+ * Мониторинг идущих занятий по данным сервера: кто из группы сколько карточек сдал,
+ * когда последняя сдача, средний итоговый балл и сколько работ ждёт оценки.
+ * Обновляется опросом сервера; по обучающемуся — его работы и оценка преподавателя.
  */
+
+const REFRESH_MS = 10_000;
 
 export function Monitor() {
   const { user } = useMe();
-  const db = useDb((s) => s.db);
-  const now = useNow(1000);
-  const running = db.sessions.filter((s) => s.teacherId === user?.id && s.status === 'running');
-  const [sessionId, setSessionId] = useState(running[0]?.id ?? '');
-  const [writeTo, setWriteTo] = useState<User | null>(null);
-  const [openStudent, setOpenStudent] = useState<User | null>(null);
+  const teacherId = user?.id;
+  const [running, setRunning] = useState<SessionDto[] | null>(null);
+  const [listErr, setListErr] = useState('');
+  const [sessionId, setSessionId] = useState('');
+
+  useEffect(() => {
+    if (!teacherId) return;
+    let alive = true;
+    const load = () =>
+      listSessions({ teacherId, activeOnly: true, size: 50 }).then(
+        (p) => {
+          if (!alive) return;
+          setRunning(p ? p.content : []);
+          setListErr(p ? '' : 'Сервер занятий недоступен');
+        },
+        (e: unknown) => alive && setListErr(describeError(e, 'Не удалось загрузить занятия')),
+      );
+    void load();
+    const t = setInterval(() => void load(), REFRESH_MS);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [teacherId]);
+
   if (!user) return null;
+  if (running === null)
+    return <Panel>{listErr ? <Notice tone="bad">{listErr}</Notice> : <Notice tone="neutral">Загрузка…</Notice>}</Panel>;
   const session = running.find((s) => s.id === sessionId) ?? running[0];
 
   if (!session)
@@ -35,157 +57,129 @@ export function Monitor() {
       </Panel>
     );
 
-  const members = db.users.filter((u) => u.groupId === session.groupId);
-  const attempts = db.attempts.filter((a) => a.sessionId === session.id);
-
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-end gap-3">
         <Select label="Занятие" value={session.id} onChange={(e) => setSessionId(e.target.value)} className="w-full sm:w-[420px]">
           {running.map((s) => (
             <option key={s.id} value={s.id}>
-              {s.title}
+              {s.studyGroupName ?? 'Группа'} · с {dateTime(s.startedAt).slice(0, 16)}
             </option>
           ))}
         </Select>
-        <Badge tone="accent">{MODE_LABELS[session.mode]}</Badge>
-        <span className="text-sm text-c-muted">
-          {db.groups.find((g) => g.id === session.groupId)?.name} · {session.scenarioIds.length} карточек
-        </span>
+        <Badge tone="ok">идёт</Badge>
       </div>
-      <Notice tone="neutral">Обновляется в реальном времени. Для проверки без сервера откройте обучающегося в соседней вкладке браузера (демо-вход «Обучающийся») и начните это занятие.</Notice>
-      <Panel pad={false}>
-        <Table>
-          <thead>
-            <tr>
-              <th>Обучающийся</th>
-              <th>Сейчас</th>
-              <th>Карточка</th>
-              <th className="text-right">Прошло</th>
-              <th>Статус службы</th>
-              <th className="text-right">Готово</th>
-              <th className="text-right">Средний балл</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {members.map((m) => {
-              const live = db.live.find((l) => l.studentId === m.id && l.sessionId === session.id);
-              const done = attempts.filter((a) => a.studentId === m.id && a.evaluation);
-              const avg = done.length ? Math.round(done.reduce((s, a) => s + finalScore(a), 0) / done.length) : null;
-              const fresh = live && now - new Date(live.updatedAt).getTime() < 10 * 60_000;
-              const elapsed = live ? (now - new Date(live.arrivedAt).getTime()) / 1000 : 0;
-              const notOpened = live && !live.openedAt;
-              return (
-                <tr key={m.id} className={cx(live && fresh && 'bg-[#f6fbf7]')}>
-                  <td className="whitespace-nowrap">
-                    <button className="font-medium hover:underline" onClick={() => setOpenStudent(m)}>
-                      {m.fullName}
-                    </button>
-                  </td>
-                  <td>
-                    {live && fresh ? (
-                      <span className="flex flex-wrap items-center gap-1.5">
-                        <Badge tone="ok">в работе</Badge>
-                        {live.inCall && <Badge tone="accent">доклад по телефону</Badge>}
-                        {notOpened && elapsed > session.normOpenSec && <Badge tone="bad">не открыта {Math.round(elapsed)} с</Badge>}
-                      </span>
-                    ) : done.length ? (
-                      <Badge>вне занятия</Badge>
-                    ) : (
-                      <span className="text-c-muted">не начинал</span>
-                    )}
-                  </td>
-                  <td className="text-[13px]">{live && fresh ? `${live.cardIndex}/${live.cardCount} · ${live.scenarioTitle}` : '—'}</td>
-                  <td className={cx('text-right tabular-nums', live && fresh && elapsed > session.normTotalSec && 'text-c-bad')}>{live && fresh ? mmss(elapsed) : '—'}</td>
-                  <td className="text-[13px]">{live && fresh ? live.lastStatus ?? (live.openedAt ? 'Получена службой' : 'Добавлена') : '—'}</td>
-                  <td className="text-right tabular-nums">{done.length}</td>
-                  <td className="text-right font-medium tabular-nums">{avg ?? '—'}</td>
-                  <td>
-                    <Button size="sm" variant="ghost" onClick={() => setWriteTo(m)}>
-                      Написать
-                    </Button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </Table>
-      </Panel>
-      {writeTo && <MessageModal to={writeTo} onClose={() => setWriteTo(null)} />}
-      {openStudent && <StudentAttempts student={openStudent} session={session} onClose={() => setOpenStudent(null)} />}
+      {listErr && <Notice tone="warn">{listErr} — показаны последние полученные данные.</Notice>}
+      <SessionMonitor key={session.id} session={session} />
     </div>
   );
 }
 
-function MessageModal({ to, onClose }: { to: User; onClose: () => void }) {
-  const { user } = useMe();
-  const [text, setText] = useState('');
-  if (!user) return null;
-  return (
-    <Modal
-      title={`Сообщение: ${to.fullName}`}
-      onClose={onClose}
-      footer={
-        <>
-          <Button onClick={onClose}>Отмена</Button>
-          <Button
-            variant="primary"
-            disabled={!text.trim()}
-            onClick={() => {
-              sendMessage(user, to.id, text.trim());
-              onClose();
-            }}
-          >
-            Отправить
-          </Button>
-        </>
-      }
-    >
-      <Textarea label="Текст" value={text} onChange={(e) => setText(e.target.value)} rows={3} placeholder="Например: обратите внимание на комментарий к «Не принята» — куда передана информация?" />
-      <p className="mt-2 text-[12px] text-c-muted">Сообщение появится у обучающегося на панели тренажёра и в кабинете.</p>
-    </Modal>
-  );
-}
+function SessionMonitor({ session }: { session: SessionDto }) {
+  const now = useNow(1000);
+  const [data, setData] = useState<SessionDetails | null>(null);
+  const [members, setMembers] = useState<{ id: string; fullName: string }[]>([]);
+  const [err, setErr] = useState('');
+  const [openStudent, setOpenStudent] = useState<string | null>(null);
+  const evals = useCardEvaluations(data?.cards, true);
 
-function StudentAttempts({ student, session, onClose }: { student: User; session: TrainingSession; onClose: () => void }) {
-  const { user } = useMe();
-  const db = useDb((s) => s.db);
-  const [open, setOpen] = useState<Attempt | null>(null);
-  const list = db.attempts.filter((a) => a.studentId === student.id && a.sessionId === session.id && a.evaluation);
-  if (open) return <AttemptDetails attempt={db.attempts.find((a) => a.id === open.id) ?? open} onClose={() => setOpen(null)} reviewer={user ?? undefined} />;
+  useEffect(() => {
+    let alive = true;
+    // состав группы; не отдали — строим список по авторам сданных карточек
+    void getStudyGroup(session.studyGroupId).then(
+      (g) => alive && setMembers(g.users.filter((u) => u.role === 'ROLE_STUDENT')),
+      () => undefined,
+    );
+    const load = () =>
+      getSession(session.id).then(
+        (d) => {
+          if (!alive) return;
+          setData(d);
+          setErr('');
+        },
+        (e: unknown) => alive && setErr(describeError(e, 'Не удалось загрузить занятие')),
+      );
+    void load();
+    const t = setInterval(() => void load(), REFRESH_MS);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [session.id, session.studyGroupId]);
+
+  const target = data?.targetCardsCount ?? session.targetCardsCount;
+  const rows = data ? monitorRows(members, data.cards, evals) : [];
+  const elapsed = (now - new Date(session.startedAt).getTime()) / 1000;
+
   return (
-    <Modal title={`${student.fullName}: ${session.title}`} onClose={onClose} width={720}>
-      {list.length === 0 ? (
-        <Empty>Завершённых карточек нет.</Empty>
-      ) : (
-        <Table>
-          <thead>
-            <tr>
-              <th>Карточка</th>
-              <th className="text-right">Балл</th>
-              <th>Итог</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((a) => (
-              <tr key={a.id}>
-                <td>{db.scenarios.find((s) => s.id === a.scenarioId)?.title}</td>
-                <td className="text-right font-medium tabular-nums">{finalScore(a)}</td>
-                <td>
-                  <Badge tone={a.evaluation!.passed ? 'ok' : 'bad'}>{a.evaluation!.passed ? 'зачёт' : 'незачёт'}</Badge>
-                </td>
-                <td className="text-right">
-                  <Button size="sm" variant="ghost" onClick={() => setOpen(a)}>
-                    Разбор и оценка
-                  </Button>
-                </td>
+    <>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-c-muted">
+        <span>идёт {mmss(Math.max(0, elapsed))}</span>
+        {target != null && <span>карточек каждому: {target}</span>}
+        {session.minIntervalSeconds != null && session.maxIntervalSeconds != null && (
+          <span>
+            интервал {session.minIntervalSeconds}–{session.maxIntervalSeconds} с
+          </span>
+        )}
+        <span>обновляется каждые {REFRESH_MS / 1000} с</span>
+      </div>
+      {err && <Notice tone="bad">{err}</Notice>}
+      <Panel pad={false}>
+        {!data && !err && (
+          <div className="p-4">
+            <Notice tone="neutral">Загрузка…</Notice>
+          </div>
+        )}
+        {data && rows.length === 0 && (
+          <div className="p-4">
+            <Empty>В группе нет обучающихся.</Empty>
+          </div>
+        )}
+        {rows.length > 0 && (
+          <Table>
+            <thead>
+              <tr>
+                <th>Обучающийся</th>
+                <th>Ход</th>
+                <th className="text-right">Сдано</th>
+                <th>Последняя сдача</th>
+                <th className="text-right">Средний балл</th>
+                <th />
               </tr>
-            ))}
-          </tbody>
-        </Table>
-      )}
-    </Modal>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const all = target != null && r.submitted >= target;
+                return (
+                  <tr key={r.studentId}>
+                    <td className="whitespace-nowrap font-medium">{r.name}</td>
+                    <td>
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        {all ? <Badge tone="ok">всё сдано</Badge> : r.submitted ? <Badge tone="accent">в работе</Badge> : <span className="text-c-muted">не сдавал</span>}
+                        {r.awaiting > 0 && <Badge tone="warn">ждут оценки: {r.awaiting}</Badge>}
+                      </span>
+                    </td>
+                    <td className="text-right tabular-nums">
+                      {r.submitted}
+                      {target != null && ` из ${target}`}
+                    </td>
+                    <td className="text-[13px] whitespace-nowrap text-c-muted">{r.lastSubmittedAt ? dateTime(r.lastSubmittedAt) : '—'}</td>
+                    <td className="text-right font-medium tabular-nums">{r.avgScore ?? '—'}</td>
+                    <td>
+                      <div className="flex justify-end">
+                        <Button size="sm" variant="ghost" disabled={!r.submitted} onClick={() => setOpenStudent(r.studentId)}>
+                          Работы
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        )}
+      </Panel>
+      {openStudent && <SessionModal id={session.id} studentId={openStudent} onClose={() => setOpenStudent(null)} />}
+    </>
   );
 }
