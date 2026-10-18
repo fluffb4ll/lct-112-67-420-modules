@@ -48,12 +48,14 @@ const RU: Record<string, string> = {
   "You are not a member of this session's study group": 'Вы не состоите в группе этого занятия',
   'You do not have permission to view this session': 'Это занятие вам недоступно',
   'You do not have permission to manage sessions': 'Недостаточно прав для управления занятиями',
+  'You do not have permission to view this session: not a member of its study group': 'Вы не состоите в группе этого занятия',
   // карточки и оценки
   'Operator card not found': 'Карточка не найдена',
   'Scenario is not approved, card cannot be submitted': 'Сценарий снят с занятий — карточку сдать нельзя',
   'Scenario is not part of this session': 'Этого сценария нет в занятии — карточку сдать нельзя',
   'Cannot submit card to an ended session': 'Занятие уже завершено — карточку сдать нельзя',
   'User is not a member of the study group for this session': 'Вы не состоите в группе этого занятия',
+  'You do not have permission to submit to this session: not a member of its study group': 'Вы не состоите в группе этого занятия',
   'Submitted card payload must not be null': 'Карточка пустая — заполните её и отправьте снова',
   'Scenario ID must not be null': 'Не указан сценарий',
   'Teacher score must be between 0 and 100': 'Оценка — от 0 до 100',
@@ -88,6 +90,7 @@ const RU: Record<string, string> = {
   'Category code cannot be empty': 'Укажите код категории',
   'Category name cannot be empty': 'Укажите название категории',
   'Only administrators can view system incidents': 'Системный журнал доступен только администратору',
+  'You do not have permission to view system incidents: administrators only': 'Системный журнал доступен только администратору',
 };
 
 /** Сообщения с подставленным значением в хвосте */
