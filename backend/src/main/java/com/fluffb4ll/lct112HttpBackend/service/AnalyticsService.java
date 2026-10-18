@@ -67,9 +67,9 @@ public class AnalyticsService {
             for (OperatorCardEntity card : sCards) {
                 sumDuration += card.getDurationSeconds() != null ? card.getDurationSeconds() : 0;
                 Optional<EvaluationEntity> evalOpt = evaluationRepository.findByCardId(card.getId());
-                if (evalOpt.isPresent()) {
+                Integer score = evalOpt.map(AnalyticsService::extractEffectiveScore).orElse(null);
+                if (score != null) {
                     EvaluationEntity eval = evalOpt.get();
-                    int score = extractEffectiveScore(eval);
                     sSumScore += score;
                     sEvalCount++;
 
@@ -132,9 +132,9 @@ public class AnalyticsService {
 
         for (OperatorCardEntity card : cards) {
             Optional<EvaluationEntity> evalOpt = evaluationRepository.findByCardId(card.getId());
-            if (evalOpt.isPresent()) {
+            Integer score = evalOpt.map(AnalyticsService::extractEffectiveScore).orElse(null);
+            if (score != null) {
                 EvaluationEntity eval = evalOpt.get();
-                int score = extractEffectiveScore(eval);
                 sumScore += score;
                 evaluatedCount++;
 
@@ -185,9 +185,10 @@ public class AnalyticsService {
             double sumScore = 0;
             int count = 0;
             for (OperatorCardEntity card : cards) {
-                Optional<EvaluationEntity> evalOpt = evaluationRepository.findByCardId(card.getId());
-                if (evalOpt.isPresent()) {
-                    int score = extractEffectiveScore(evalOpt.get());
+                Integer score = evaluationRepository.findByCardId(card.getId())
+                        .map(AnalyticsService::extractEffectiveScore)
+                        .orElse(null);
+                if (score != null) {
                     sumScore += score;
                     count++;
                 }
@@ -283,12 +284,15 @@ public class AnalyticsService {
         targetMap.compute("grammar", (k, v) -> v + getDouble(complianceErrors.get("grammarScore")));
     }
 
-    private int extractEffectiveScore(EvaluationEntity eval) {
-        if (eval == null) return 0;
+    /**
+     * Балл оценки или null, если его ещё нет (ИИ в работе или недоступен, преподаватель не оценил).
+     * Такая оценка не входит ни в средний балл, ни в «сдан/не сдан»: раньше она шла как 0 и роняла среднее.
+     */
+    private static Integer extractEffectiveScore(EvaluationEntity eval) {
+        if (eval == null) return null;
         if (eval.getFinalScore() != null) return eval.getFinalScore();
         if (eval.getTeacherScore() != null) return eval.getTeacherScore();
-        if (eval.getAiScore() != null) return eval.getAiScore();
-        return 0;
+        return eval.getAiScore();
     }
 
     private double getDouble(Object obj) {
