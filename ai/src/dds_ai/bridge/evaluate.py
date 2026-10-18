@@ -265,13 +265,13 @@ _FAULT = r"(?:ошибок|ошибки|нарушений|нарушения|з
 _NONE = r"(?:ни\s+одн\w*|ни\s+един\w*|никак\w*)"
 # между «не допустили» и «ошибок» — только «ни одной», «никаких», «грубых»
 _QUANTIFIERS = rf"(?:{_NONE}\s+|\w+(?:ых|их)\s+){{0,2}}"
-_FOUND = r"(?:допустил|допускал|допущен|выявлен|обнаружен|найден|замечен|сделал)\w*"
-# «ошибок … не было» и «ошибок … нет» — только в конце: «не было исправлено» — упрёк
-_END = r"(?!\s*[а-яё])"
+_FOUND = r"(?:допустил|допускал|допущен|выявлен|обнаружен|найден|замечен|сдела[лн])\w*"
+# «ошибок … не было исправлено» — упрёк, а не «ошибок не было»
+_NOT_PARTICIPLE = r"(?!\s+[а-яё]+[нт][оаы]\b)"
 NO_FAULTS = re.compile(
     rf"\b(?:нет|без|{_NONE})\s+{_FAULT}"
     rf"|\bне\s+(?:было|(?:было\s+)?{_FOUND})\s+{_QUANTIFIERS}{_FAULT}"
-    rf"|\b{_FAULT}\s+(?:\w+\s+){{0,2}}?(?:нет{_END}|не\s+(?:было\s+)?{_FOUND}|не\s+было{_END})"
+    rf"|\b{_FAULT}\s+(?:\w+\s+){{0,2}}?(?:нет\b|не\s+(?:было\s+)?{_FOUND}|не\s+было{_NOT_PARTICIPLE})"
 )
 # цитаты: статус «Не принята», текст комментария «Не обслуживаем…» — не мнение модели
 QUOTED = re.compile(r"«[^»]*»|\"[^\"]*\"|“[^”]*”")
@@ -306,7 +306,7 @@ def _contradicts_rules(sentence: str, weak_topics: tuple[str, ...], failed: bool
     clauses = _clauses(QUOTED.sub(" ", sentence))
     # «ошибок нет, но статус выбран неверно» — не похвала всей работе
     rest_words = [_ru_words(NO_FAULTS.sub(" ", c)) for c in clauses]
-    critiques = any(_critique(w) or NEGATIONS & set(w) for w in rest_words)
+    critiques = any(_critique(w) or NEGATIONS & set(w) or _advises(w) for w in rest_words)
     for clause in clauses:
         no_faults = bool(NO_FAULTS.search(clause))
         rest = NO_FAULTS.sub(" ", clause)
