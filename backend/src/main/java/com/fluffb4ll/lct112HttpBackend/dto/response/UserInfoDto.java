@@ -2,6 +2,7 @@ package com.fluffb4ll.lct112HttpBackend.dto.response;
 
 import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -40,10 +41,13 @@ public record UserInfoDto(
             );
         }
 
+        // Группы лежат в Set без порядка: сортируем, чтобы ответ входа и /me совпадали, а первая группа не скакала
         List<StudyGroupDto> studyGroupDtos = user.getStudyGroups() == null
                 ? List.of()
                 : user.getStudyGroups().stream()
                   .map(g -> new StudyGroupDto(g.getId(), g.getName(), g.getTeacher().getId()))
+                  .sorted(Comparator.comparing(StudyGroupDto::name, Comparator.nullsLast(Comparator.naturalOrder()))
+                          .thenComparing(StudyGroupDto::id))
                   .toList();
 
         return new UserInfoDto(
