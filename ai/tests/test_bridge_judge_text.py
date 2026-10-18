@@ -12,7 +12,6 @@ def verdict(summary, remarks=()):
         lambda _: json.dumps(
             {
                 "comment_score": 10,
-                "report_score": 10,
                 "remarks": list(remarks),
                 "summary": summary,
             },

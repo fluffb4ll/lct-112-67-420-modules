@@ -55,3 +55,16 @@ def test_unknown_attempt_and_scenario(client):
     assert client.post("/v1/attempts", json={"scenario_id": "nope"}).status_code == 404
     missing = "00000000-0000-0000-0000-000000000000"
     assert client.get(f"/v1/attempts/{missing}/events").status_code == 404
+
+
+def test_llm_threads_default_to_all_cores_and_env_overrides(monkeypatch):
+    from dds_ai.service import app as app_module
+
+    monkeypatch.delenv("DDS_LLM_N_THREADS", raising=False)
+    monkeypatch.setattr(app_module.os, "sched_getaffinity", lambda _pid: {0, 1}, raising=False)
+    # llama-cpp-python по умолчанию взял бы половину: на стенде с 2 vCPU — один поток
+    assert app_module._llm_threads() == 2
+    monkeypatch.setenv("DDS_LLM_N_THREADS", "3")
+    assert app_module._llm_threads() == 3
+    monkeypatch.setenv("DDS_LLM_N_THREADS", " ")
+    assert app_module._llm_threads() == 2
