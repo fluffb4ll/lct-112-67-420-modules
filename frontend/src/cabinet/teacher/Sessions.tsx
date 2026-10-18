@@ -419,8 +419,9 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
       (e) => {
         if (!alive) return;
         setEvaluation(e);
-        setScore(e.teacherScore != null ? String(e.teacherScore) : '');
-        setComment(e.teacherComment ?? '');
+        // преподаватель мог начать ввод до ответа сервера — введённое не затираем
+        setScore((s) => s || (e.teacherScore != null ? String(e.teacherScore) : ''));
+        setComment((c) => c || (e.teacherComment ?? ''));
       },
       () => alive && setEvaluation(null),
     );
@@ -443,7 +444,8 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
   }, [card.id, pending, aiRound]);
 
   const save = async () => {
-    const n = Number(score);
+    // пустое поле — не ноль: Number('') дал бы оценку 0
+    const n = score.trim() ? Number(score) : NaN;
     if (!Number.isFinite(n) || n < 0 || n > 100) return setErr('Оценка — число от 0 до 100');
     setBusy(true);
     setErr('');
