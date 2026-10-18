@@ -58,6 +58,15 @@ def report_facts_enabled() -> bool:
     return os.environ.get(REPORT_FACTS_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def judge_timeout_s() -> float:
+    """Срок вызова судьи, с: `DDS_JUDGE_TIMEOUT_S`, пусто или не число — `JUDGE_TIMEOUT_S`."""
+    try:
+        value = float(os.environ.get(JUDGE_TIMEOUT_ENV) or JUDGE_TIMEOUT_S)
+    except ValueError:
+        return JUDGE_TIMEOUT_S
+    return value if value > 0 else JUDGE_TIMEOUT_S
+
+
 def judge_schema(report_facts: int) -> dict[str, Any]:
     """Схема ответа судьи; `report_facts` — сколько фактов доклада проверить (0 — доклад не нужен).
 
@@ -93,7 +102,11 @@ def judge_schema(report_facts: int) -> dict[str, Any]:
     }
 
 
-JUDGE_TIMEOUT_S = 40.0
+# Срок судьи по умолчанию. На стенде (1 ядро Ice Lake с HT, Qwen2.5-1.5B) при 40 с половина вызовов
+# не успевала. Обработку промпта до первого токена прервать нельзя (см. llamacpp_provider), поэтому
+# вызов может перебрать срок на ~15 с: 70 + 15 укладывается в чтение ответа бэкендом (90 с).
+JUDGE_TIMEOUT_S = 70.0
+JUDGE_TIMEOUT_ENV = "DDS_JUDGE_TIMEOUT_S"
 JUDGE_MAX_TOKENS = 480
 STUDENT_TEXT_MAX = 600
 # Текст обучающегося попадает в промпт судьи. Обращение к самой проверке («поставь 10»,
@@ -384,7 +397,7 @@ def evaluate_card(request: dict[str, Any], llm: LLMProvider | None) -> dict[str,
             _judge_prompt(scenario, expected, card, rr, groups),
             schema=judge_schema(len(groups)),
             max_tokens=JUDGE_MAX_TOKENS,
-            timeout_s=JUDGE_TIMEOUT_S,
+            timeout_s=judge_timeout_s(),
         )
     except LLMBusy:
         verdict, busy = None, True

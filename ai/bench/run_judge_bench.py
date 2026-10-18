@@ -16,7 +16,7 @@
 судьи без фактов (только время).
 
 Время — весь `evaluate_card` (правила, промпт, генерация, разбор). Ответ после
-`JUDGE_TIMEOUT_S` — тайм-аут, итог по правилам (`evaluatedBy == "rules"`).
+`DDS_JUDGE_TIMEOUT_S` — тайм-аут, итог по правилам (`evaluatedBy == "rules"`).
 
     python bench/run_judge_bench.py --model /models/llm/model.gguf --threads 2 --json out.json
 """
@@ -31,7 +31,7 @@ import statistics
 import time
 from typing import Any
 
-from dds_ai.bridge.evaluate import JUDGE_TIMEOUT_S, REPORT_FACTS_ENV, evaluate_card
+from dds_ai.bridge.evaluate import REPORT_FACTS_ENV, evaluate_card, judge_timeout_s
 
 CHIEF = "chief-1"
 
@@ -232,7 +232,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "machine": platform.machine(),
         "cpu_count": os.cpu_count(),
         "load_s": round(load_s, 1),
-        "judge_timeout_s": JUDGE_TIMEOUT_S,
+        "judge_timeout_s": judge_timeout_s(),
         "cases": len(rows),
         "llm_answered": len(answered),
         "correct": sum(r["points"] == r["expected"] for r in rows),

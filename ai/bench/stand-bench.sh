@@ -13,6 +13,7 @@
 #
 # Переопределения: IMAGE=dds-ai:latest VOLUME=dds-trainer_ai_models MODEL=/models/llm/model.gguf
 # BENCH_MEMORY=3g (лимит памяти контейнера бенча) MIN_FREE_MB=2500 (меньше свободной — отказ).
+# FLAGS="0 1" — какие DDS_JUDGE_REPORT_FACTS прогнать; DDS_JUDGE_TIMEOUT_S — срок судьи (пусто — как в коде).
 set -euo pipefail
 
 WORK=/tmp/judge-bench
@@ -50,12 +51,13 @@ if [ -n "$SSH_TARGET" ]; then
   [ "$DRY_RUN" = 1 ] && remote_args+=(--dry-run)
   ssh_cmd=(ssh -p "$SSH_PORT" "$SSH_TARGET")
   echo "копирую ai/src и ai/bench в $SSH_TARGET:$WORK/ai"
-  COPYFILE_DISABLE=1 tar czf - --exclude=__pycache__ --exclude='*.pyc' -C "$AI_ROOT" src bench \
+  COPYFILE_DISABLE=1 tar czf - --no-xattrs --exclude=__pycache__ --exclude='*.pyc' -C "$AI_ROOT" src bench \
     | "${ssh_cmd[@]}" "rm -rf $WORK && mkdir -p $WORK/ai && tar xzf - -C $WORK/ai"
   status=0
   # переменные окружения-переопределения передаются как есть
   "${ssh_cmd[@]}" "IMAGE='${IMAGE:-}' VOLUME='${VOLUME:-}' MODEL='${MODEL:-}' \
     BENCH_MEMORY='${BENCH_MEMORY:-}' MIN_FREE_MB='${MIN_FREE_MB:-}' \
+    FLAGS='${FLAGS:-}' DDS_JUDGE_TIMEOUT_S='${DDS_JUDGE_TIMEOUT_S:-}' \
     bash $WORK/ai/bench/stand-bench.sh $(printf '%q ' "${remote_args[@]}")" || status=$?
   mkdir -p "$RESULTS"
   scp -q -P "$SSH_PORT" -r "$SSH_TARGET:$remote_results/." "$RESULTS/" || true
@@ -68,6 +70,13 @@ fi
 RESULTS=${RESULTS:-$PWD/judge-bench-results-$STAMP}
 mkdir -p "$RESULTS"
 RESULTS=$(cd "$RESULTS" && pwd)
+# контейнер пишет JSON от своего пользователя (dds), а не от владельца каталога
+chmod a+rwx "$RESULTS"
+
+# на стенде docker доступен только через sudo
+if ! docker info >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+  docker() { sudo -n docker "$@"; }
+fi
 
 # копия кода: ai/src и ai/bench в /tmp/judge-bench (если скрипт уже оттуда — как есть)
 if [ "$AI_ROOT" != "$WORK/ai" ]; then
@@ -103,6 +112,8 @@ if [ -z "${MODEL:-}" ]; then
   MODEL=${MODEL:-/models/llm/model.gguf}
 fi
 BENCH_MEMORY=${BENCH_MEMORY:-3g}
+FLAGS=${FLAGS:-0 1}
+JUDGE_TIMEOUT=${DDS_JUDGE_TIMEOUT_S:-}
 MIN_FREE_MB=${MIN_FREE_MB:-2500}
 THREADS=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)
 
@@ -123,6 +134,7 @@ fi
   echo "volume: $VOLUME"
   echo "model: $MODEL"
   echo "bench memory limit: $BENCH_MEMORY"
+  echo "flags: $FLAGS, judge timeout: ${JUDGE_TIMEOUT:-как в коде}"
 } | tee "$RESULTS/env.txt"
 
 if command -v free >/dev/null && [ "$DRY_RUN" = 0 ]; then
@@ -149,6 +161,7 @@ run_bench() {
   local cmd=(docker run --rm --name "$name" --memory "$BENCH_MEMORY"
     -v "$VOLUME:/models:ro" -v "$WORK/ai:/repo/ai:ro" -v "$RESULTS:/out"
     -e PYTHONPATH=/repo/ai/src -e PYTHONDONTWRITEBYTECODE=1 -e "DDS_JUDGE_REPORT_FACTS=$facts"
+    -e "DDS_JUDGE_TIMEOUT_S=$JUDGE_TIMEOUT"
     --entrypoint python "$IMAGE" /repo/ai/bench/run_judge_bench.py
     --model "$MODEL" --threads "$THREADS" --json "/out/$out.json")
   echo "== DDS_JUDGE_REPORT_FACTS=$facts: ${cmd[*]}"
@@ -176,7 +189,8 @@ run_bench() {
 }
 
 status=0
-run_bench 0 || status=$?
-run_bench 1 || status=$?
+for facts in $FLAGS; do
+  run_bench "$facts" || status=$?
+done
 echo "результаты: $RESULTS"
 exit "$status"

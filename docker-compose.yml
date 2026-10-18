@@ -64,6 +64,8 @@ services:
       DDS_LLM_N_THREADS: ${DDS_LLM_N_THREADS:-}
       # 1 — судья засчитывает факты доклада по цитатам; по умолчанию доклад оценивают только правила
       DDS_JUDGE_REPORT_FACTS: ${DDS_JUDGE_REPORT_FACTS:-0}
+      # срок судьи оценки, с; вместе с перебором на обработку промпта должен быть меньше app.ai.read-timeout-ms бэкенда (90 с)
+      DDS_JUDGE_TIMEOUT_S: ${DDS_JUDGE_TIMEOUT_S:-70}
       DDS_LLM_LOCK_TIMEOUT_S: ${DDS_LLM_LOCK_TIMEOUT_S:-20}
       DDS_STT_MAX_BYTES: ${DDS_STT_MAX_BYTES:-10485760}
       DDS_STT_MAX_SECONDS: ${DDS_STT_MAX_SECONDS:-120}
