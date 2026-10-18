@@ -16,6 +16,7 @@ import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.ScenarioStatus;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.SessionException;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.SessionConflictException;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.ScenarioRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.SessionRepository;
@@ -287,6 +288,22 @@ class SessionServiceTest {
         startIn(foreign);
 
         verify(sessionRepository).save(any());
+    }
+
+    @Test
+    void cannotStartSecondActiveSessionForGroup() throws AuthenticationException {
+        UserEntity teacher = user(UUID.randomUUID(), "ROLE_TEACHER");
+        loggedInAs(teacher);
+        StudyGroupEntity group = groupOf(teacher);
+        when(studyGroupRepository.findById(groupId)).thenReturn(Optional.of(group));
+        when(sessionRepository.existsByStudyGroup_IdAndEndedAtIsNull(groupId)).thenReturn(true);
+
+        SessionConflictException e = assertThrows(SessionConflictException.class,
+                () -> sessionService.startSession(token, new StartSessionRequestDto(groupId, List.of(approvedId), 1, 15, 45)));
+
+        assertTrue(e.getMessage().contains("уже идёт"));
+        verifyNoInteractions(scenarioRepository);
+        verify(sessionRepository, never()).save(any());
     }
 
     private SessionEntity activeSession(UserEntity startedBy, StudyGroupEntity group) {

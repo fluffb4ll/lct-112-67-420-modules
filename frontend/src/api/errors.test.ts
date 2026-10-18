@@ -108,6 +108,11 @@ describe('describeError — перевод ошибок бэкенда', () => {
     expect(describeError(new ApiError(502, ''))).toBe('Сервер недоступен. Проверьте, что бэкенд запущен.');
   });
 
+  it('конфликт занятия показывает русское сообщение сервера', () => {
+    const message = 'Для этой группы уже идёт занятие — сначала завершите его';
+    expect(describeError(new ApiError(409, message))).toBe(message);
+  });
+
   it('неизвестное сообщение показывается как есть', () => {
     expect(describeError(new ApiError(400, 'Something new'))).toBe('Something new');
   });

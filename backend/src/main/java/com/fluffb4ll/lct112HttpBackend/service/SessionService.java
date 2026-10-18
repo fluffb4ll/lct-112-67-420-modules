@@ -12,6 +12,7 @@ import com.fluffb4ll.lct112HttpBackend.model.enums.EventType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.Permissions;
 import com.fluffb4ll.lct112HttpBackend.model.enums.ScenarioStatus;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.SessionConflictException;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.SessionException;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.ScenarioRepository;
@@ -63,6 +64,9 @@ public class SessionService {
         // занятие назначается только своей группе; администратор — любой
         if (!AccessUtil.canManageGroup(currentUser, studyGroup)) {
             throw new ForbiddenException("You can start sessions only for your own study groups");
+        }
+        if (sessionRepository.existsByStudyGroup_IdAndEndedAtIsNull(studyGroup.getId())) {
+            throw new SessionConflictException("Для этой группы уже идёт занятие — сначала завершите его");
         }
 
         List<ScenarioEntity> scenarios = scenarioRepository.findAllById(request.scenarioIds());

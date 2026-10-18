@@ -55,6 +55,12 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(400).body(response);
     }
 
+    @ExceptionHandler(SessionConflictException.class)
+    public ResponseEntity<ErrorResponseDto> processSessionConflictError(SessionConflictException e) {
+        ErrorResponseDto response = new ErrorResponseDto(e.getMessage());
+        return ResponseEntity.status(409).body(response);
+    }
+
     @ExceptionHandler(OperatorCardException.class)
     public ResponseEntity<ErrorResponseDto> processOperatorCardError(OperatorCardException e) {
         ErrorResponseDto response = new ErrorResponseDto(e.getMessage());

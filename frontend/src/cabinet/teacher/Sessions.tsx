@@ -24,6 +24,7 @@ import { useCardEvaluations } from '../../training/cardEvaluations';
 import { pollUntil } from '../../training/pollUntil';
 import { Badge, Button, Checkbox, ConfirmModal, Empty, Input, Modal, Notice, Panel, Select, Table, Textarea } from '../../ui';
 import { startableGroups } from './groupAccess';
+import { normalizeSessionNumber } from './sessionForm';
 
 /*
  * Занятия — через бэкенд (/api/sessions, ветка mvp).
@@ -182,9 +183,9 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
   const [scenarios, setScenarios] = useState<ScenarioRow[] | null>(null);
   const [groupId, setGroupId] = useState('');
   const [picked, setPicked] = useState<string[]>([]);
-  const [count, setCount] = useState(5);
-  const [minSec, setMinSec] = useState(60);
-  const [maxSec, setMaxSec] = useState(180);
+  const [count, setCount] = useState('5');
+  const [minSec, setMinSec] = useState('60');
+  const [maxSec, setMaxSec] = useState('180');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -210,11 +211,17 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
   const submit = async () => {
     if (!chosenGroup) return setErr('Выберите группу');
     if (!picked.length) return setErr('Отметьте хотя бы один сценарий');
-    if (minSec > maxSec) return setErr('Минимальный интервал больше максимального');
+    const countValue = normalizeSessionNumber(count, 1, 50);
+    const minSecValue = normalizeSessionNumber(minSec, 0);
+    const maxSecValue = normalizeSessionNumber(maxSec, 0);
+    setCount(String(countValue));
+    setMinSec(String(minSecValue));
+    setMaxSec(String(maxSecValue));
+    if (minSecValue > maxSecValue) return setErr('Минимальный интервал больше максимального');
     setBusy(true);
     setErr('');
     try {
-      const r = await startSession({ studyGroupId: chosenGroup, scenarioIds: picked, targetCardsCount: count, minIntervalSeconds: minSec, maxIntervalSeconds: maxSec });
+      const r = await startSession({ studyGroupId: chosenGroup, scenarioIds: picked, targetCardsCount: countValue, minIntervalSeconds: minSecValue, maxIntervalSeconds: maxSecValue });
       onStarted({ students: r.totalStudentsAssigned, cards: r.totalCardsAssigned });
     } catch (e) {
       setErr(describeError(e, 'Не удалось начать занятие'));
@@ -255,9 +262,31 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
         )}
 
         <div className="grid gap-3 sm:grid-cols-3">
-          <Input label="Карточек на обучающегося" type="number" min={1} max={50} value={count} onChange={(e) => setCount(Math.max(1, Number(e.target.value) || 1))} />
-          <Input label="Интервал от, с" type="number" min={0} value={minSec} onChange={(e) => setMinSec(Math.max(0, Number(e.target.value) || 0))} />
-          <Input label="Интервал до, с" type="number" min={0} value={maxSec} onChange={(e) => setMaxSec(Math.max(0, Number(e.target.value) || 0))} />
+          <Input
+            label="Карточек на обучающегося"
+            type="number"
+            min={1}
+            max={50}
+            value={count}
+            onChange={(e) => setCount(e.target.value)}
+            onBlur={() => setCount(String(normalizeSessionNumber(count, 1, 50)))}
+          />
+          <Input
+            label="Интервал от, с"
+            type="number"
+            min={0}
+            value={minSec}
+            onChange={(e) => setMinSec(e.target.value)}
+            onBlur={() => setMinSec(String(normalizeSessionNumber(minSec, 0)))}
+          />
+          <Input
+            label="Интервал до, с"
+            type="number"
+            min={0}
+            value={maxSec}
+            onChange={(e) => setMaxSec(e.target.value)}
+            onBlur={() => setMaxSec(String(normalizeSessionNumber(maxSec, 0)))}
+          />
         </div>
 
         <div>
