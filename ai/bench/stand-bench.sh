@@ -68,6 +68,13 @@ fi
 RESULTS=${RESULTS:-$PWD/judge-bench-results-$STAMP}
 mkdir -p "$RESULTS"
 RESULTS=$(cd "$RESULTS" && pwd)
+# контейнер пишет JSON от своего пользователя (dds), а не от владельца каталога
+chmod a+rwx "$RESULTS"
+
+# на стенде docker доступен только через sudo
+if ! docker info >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+  docker() { sudo -n docker "$@"; }
+fi
 
 # копия кода: ai/src и ai/bench в /tmp/judge-bench (если скрипт уже оттуда — как есть)
 if [ "$AI_ROOT" != "$WORK/ai" ]; then
