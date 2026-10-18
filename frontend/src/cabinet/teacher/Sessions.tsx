@@ -23,6 +23,7 @@ import { CardBadge } from '../shared/CardBadge';
 import { useCardEvaluations } from '../../training/cardEvaluations';
 import { pollUntil } from '../../training/pollUntil';
 import { Badge, Button, Checkbox, ConfirmModal, Empty, Input, Modal, Notice, Panel, Select, Table, Textarea } from '../../ui';
+import { startableGroups } from './groupAccess';
 
 /*
  * Занятия — через бэкенд (/api/sessions, ветка mvp).
@@ -191,7 +192,7 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
     let alive = true;
     void listStudyGroups(0, 100).then(
       // занятие можно начать только в своей группе; администратору — в любой
-      (p) => alive && setGroups(p ? p.content.filter((g) => role?.kind === 'admin' || g.teacher?.id === user?.id) : null),
+      (p) => alive && setGroups(p ? startableGroups(p.content, { id: user?.id, isAdmin: role?.kind === 'admin' }) : null),
       () => alive && setGroups(null),
     );
     // в занятие идут только утверждённые сценарии

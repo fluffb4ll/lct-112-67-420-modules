@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { listUsers, type PageResponse, type UserTableRow } from '../../api/admin';
+import type { PageResponse, UserTableRow } from '../../api/admin';
 import { describeError } from '../../api/errors';
-import { apiFetchOptional } from '../../api/http';
 import {
   addGroupMember,
   createStudyGroup,
@@ -16,6 +15,7 @@ import {
 } from '../../api/teacher';
 import { useMe } from '../../store/session';
 import { Button, ConfirmModal, Input, Modal, Notice, Panel, Select, Table } from '../../ui';
+import { canManageGroup, isOwnGroup, loadStudents } from './groupAccess';
 
 /*
  * Учебные группы — через бэкенд (/api/teacher/studyGroup*, ветка teacher).
@@ -25,14 +25,6 @@ import { Button, ConfirmModal, Input, Modal, Notice, Panel, Select, Table } from
  */
 
 type Loaded<T> = T | null | 'loading';
-
-/** Кого можно зачислить. Старый сервер без /users/students — пробуем общий список пользователей */
-async function loadStudents(): Promise<UserTableRow[] | null> {
-  const students = await apiFetchOptional<UserTableRow[]>('/users/students');
-  if (students) return students;
-  const all = await listUsers(0, 100);
-  return all ? all.content.filter((u) => /STUDENT|ОБУЧ/i.test(u.roleName) && u.isActive) : null;
-}
 
 async function load(page: number): Promise<{ groups: PageResponse<StudyGroupRow> | null; error?: string }> {
   try {
@@ -80,9 +72,9 @@ export function Groups() {
     }
   };
 
-  const mine = (g: StudyGroupRow) => g.teacher?.id === user?.id;
-  const isAdmin = role?.kind === 'admin';
-  const manage = (g: StudyGroupRow) => canEdit && (isAdmin || mine(g));
+  const viewer = { id: user?.id, isAdmin: role?.kind === 'admin' };
+  const mine = (g: StudyGroupRow) => isOwnGroup(g, viewer);
+  const manage = (g: StudyGroupRow) => canManageGroup(g, viewer, canEdit);
   const rows = groups !== null && groups !== 'loading' ? groups.content : [];
   const pages = groups !== null && groups !== 'loading' ? Math.max(groups.totalPages, 1) : 1;
   const total = groups !== null && groups !== 'loading' ? groups.totalElements : 0;
