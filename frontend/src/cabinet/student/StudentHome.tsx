@@ -132,7 +132,7 @@ export function StudentHome() {
             </Panel>
             <div className="grid grid-cols-2 gap-3">
               <Stat label="Попыток" value={mine.length} />
-              <Stat label="Средний балл" value={mine.length ? Math.round(mine.reduce((s, a) => s + resultOf(a).score, 0) / mine.length) : '—'} />
+              <Stat label="Средний балл" value={mine.length ? Math.round(mine.reduce((s, a) => s + resultOf(a).score, 0) / mine.length) : '—'} sub="с тренировками" />
               <Stat label="Зачтено" value={mine.length ? `${Math.round((mine.filter((a) => resultOf(a).passed).length / mine.length) * 100)}%` : '—'} />
               <Stat label="Открытие, среднее" value={mine.length ? `${Math.round(mine.reduce((s, a) => s + (a.evaluation!.openSec ?? 60), 0) / mine.length)} с` : '—'} sub="норматив 30 с" />
             </div>
@@ -146,7 +146,7 @@ export function StudentHome() {
         </div>
       )}
       {tab === 'results' && (
-        <Panel title={`Попытки (${mine.length})`} pad={false}>
+        <Panel title={`Попытки на этом устройстве (${mine.length})`} pad={false}>
           {mine.length === 0 ? (
             <div className="p-4">
               <Empty>Результатов пока нет.</Empty>

@@ -40,7 +40,7 @@ export function ServerProfile({ studentId }: { studentId: string }) {
         <div className="grid gap-3 sm:grid-cols-3">
           <Stat label="Сдано карточек" value={data.totalCardsSubmitted} />
           <Stat label="Средний балл" value={Math.round(data.averageScore)} tone={data.isPassing ? 'ok' : 'warn'} />
-          <Stat label="Итог" value={data.isPassing ? 'зачёт' : 'не сдан'} tone={data.isPassing ? 'ok' : 'bad'} />
+          <Stat label="Итог" value={data.isPassing ? 'зачёт' : 'не сдан'} tone={data.isPassing ? 'ok' : 'bad'} sub="по среднему баллу, порог 75" />
         </div>
 
         {!!skills.length && (

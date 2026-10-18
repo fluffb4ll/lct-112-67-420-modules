@@ -282,7 +282,7 @@ export function SessionModal({ id, onClose, studentId }: { id: string; onClose: 
   const [err, setErr] = useState('');
   const [scoreFor, setScoreFor] = useState<CardSummary | null>(null);
   const cards = data?.cards.filter((c) => !studentId || c.studentId === studentId);
-  const evals = useCardEvaluations(cards);
+  const evals = useCardEvaluations(cards, true);
 
   const load = useCallback(
     () =>
