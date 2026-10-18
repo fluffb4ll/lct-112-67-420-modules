@@ -18,7 +18,7 @@ import { navigate } from '../../app/router';
 import { ddmmyyyy } from '../../domain/format';
 import { useMe } from '../../store/session';
 import { Badge, Button, Checkbox, Empty, Input, Modal, Notice, Panel, Select, Table, Tabs } from '../../ui';
-import { composeAndSave, generateMessage, type GenerateOutcome } from './composeNote';
+import { composeAndSave, generateMessage, noticesAfterLoad, type BankNotices, type GenerateOutcome } from './composeNote';
 import { STATUS_LABELS } from './labels';
 
 /*
@@ -52,13 +52,13 @@ export function ScenarioBank() {
   const [data, setData] = useState<Loaded<PageResponse<ScenarioRow>>>('loading');
   const [categories, setCategories] = useState<IncidentCategory[] | null>(null);
   const [gen, setGen] = useState(false);
-  const [msg, setMsg] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null);
+  const [notices, setNotices] = useState<BankNotices>({ load: null, generate: null });
 
   const canEdit = !!info?.permissions.includes(PERMISSION_EDIT_SCENARIOS);
 
   const apply = useCallback((r: Awaited<ReturnType<typeof load>>) => {
     setData(r.list);
-    setMsg((m) => (r.error ? { tone: 'bad', text: r.error } : m?.tone === 'bad' ? null : m));
+    setNotices((n) => noticesAfterLoad(n, r.error));
   }, []);
 
   const reload = useCallback(() => load(filter, search, page).then(apply), [apply, filter, search, page]);
@@ -95,7 +95,14 @@ export function ScenarioBank() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="primary" disabled={!canEdit} onClick={() => setGen(true)}>
+        <Button
+          variant="primary"
+          disabled={!canEdit}
+          onClick={() => {
+            setNotices((n) => ({ ...n, generate: null }));
+            setGen(true);
+          }}
+        >
           Сгенерировать ИИ
         </Button>
         <Button disabled={!canEdit} onClick={() => navigate('/teacher/bank/new')}>
@@ -112,7 +119,17 @@ export function ScenarioBank() {
         />
       </div>
 
-      {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+      {notices.load && <Notice tone="bad">{notices.load}</Notice>}
+      {notices.generate && (
+        <Notice tone={notices.generate.tone}>
+          <div className="flex items-start gap-2">
+            <span className="flex-1">{notices.generate.text}</span>
+            <button type="button" className="text-arm-muted hover:text-arm-text" aria-label="Закрыть сообщение" onClick={() => setNotices((n) => ({ ...n, generate: null }))}>
+              ×
+            </button>
+          </div>
+        </Notice>
+      )}
       {!canEdit && data !== null && <Notice tone="warn">У вашей роли нет права на работу со сценариями (TEACHER_CAN_EDIT_SCENARIOS) — банк доступен только для просмотра.</Notice>}
       {data === null && (
         <Notice tone="warn">
@@ -196,7 +213,7 @@ export function ScenarioBank() {
             setGen(false);
             setFilter('DRAFT');
             setPage(0);
-            setMsg(generateMessage(outcome, total));
+            setNotices((n) => ({ ...n, generate: generateMessage(outcome, total) }));
             void reload();
           }}
         />

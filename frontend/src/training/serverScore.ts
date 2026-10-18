@@ -1,4 +1,4 @@
-import type { Evaluation as ServerEvaluation } from '../api/sessions';
+import type { CardStatusBackend, Evaluation as ServerEvaluation } from '../api/sessions';
 import { DEFAULT_NORMS } from '../domain/evaluate';
 import type { Attempt } from '../domain/types';
 
@@ -58,4 +58,20 @@ export function attemptVerdict(attempt: Pick<Attempt, 'evaluation' | 'passScore'
   const ev = attempt.evaluation;
   if (!ev) return null;
   return scoreBadge(ev, server, !!attempt.serverCardId, attempt.passScore ?? DEFAULT_NORMS.passScore).passed;
+}
+
+/**
+ * Бейдж статуса карточки в списках (результаты обучающегося, занятие у преподавателя).
+ * «Оценка ИИ недоступна» — отдельно от «ждёт оценки»: ИИ-контур не ответил, ждать бесполезно,
+ * балл выставит преподаватель. Без оценки (ещё не загружена, не удалось) — по статусу карточки.
+ */
+export function cardStatusBadge(
+  status: CardStatusBackend,
+  ev: ServerEvaluation | null | undefined,
+): { tone: 'ok' | 'warn' | 'bad'; text: string } {
+  const view = ev ? serverScoreView(ev) : null;
+  if (view?.kind === 'score') return { tone: 'ok', text: `оценена: ${view.score}` };
+  if (status === 'EVALUATED') return { tone: 'ok', text: 'оценена' };
+  if (view?.kind === 'unavailable') return { tone: 'bad', text: 'оценка ИИ недоступна' };
+  return { tone: 'warn', text: 'ждёт оценки' };
 }

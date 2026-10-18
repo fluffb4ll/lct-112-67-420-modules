@@ -18,7 +18,7 @@ import {
 } from '../../api/admin';
 import { BACKEND_PERMISSIONS, type DepartmentDto, type UserInfoDto } from '../../api/auth';
 import { describeError } from '../../api/errors';
-import { ApiError } from '../../api/http';
+import { isPermissionDenied } from '../../api/http';
 import { useMe } from '../../store/session';
 import { Badge, Button, Checkbox, ConfirmModal, Input, Modal, Notice, Panel, Select, Table } from '../../ui';
 
@@ -43,8 +43,8 @@ async function loadAll(page: number): Promise<{
     const [users, roles, departments] = await Promise.all([listUsers(page), listRoles(), listDepartments()]);
     return { users, roles, departments };
   } catch (e) {
-    // 401 здесь означает нехватку прав: истёкшую сессию перехватывает http.ts и возвращает на вход
-    const denied = e instanceof ApiError && e.status === 401;
+    // нехватка прав: 403, у старого бэкенда — 401 с «permission» (истёкшую сессию перехватывает http.ts)
+    const denied = isPermissionDenied(e);
     return { users: null, roles: null, departments: null, error: describeError(e, 'Не удалось загрузить данные'), denied };
   }
 }

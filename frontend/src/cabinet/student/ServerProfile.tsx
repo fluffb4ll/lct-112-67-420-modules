@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { studentProfile, type StudentProfile } from '../../api/analytics';
 import { dateTime } from '../../domain/format';
-import { Badge, Notice, Panel, Stat, Table } from '../../ui';
+import { CardBadge } from '../shared/CardBadge';
+import { useCardEvaluations } from '../../training/cardEvaluations';
+import { Notice, Panel, Stat, Table } from '../../ui';
 import { HBars } from '../../ui/charts';
 
 /*
@@ -12,6 +14,7 @@ import { HBars } from '../../ui/charts';
 export function ServerProfile({ studentId }: { studentId: string }) {
   const [data, setData] = useState<StudentProfile | null>(null);
   const [off, setOff] = useState(false);
+  const evals = useCardEvaluations(data?.recentCards);
 
   useEffect(() => {
     let alive = true;
@@ -70,7 +73,7 @@ export function ServerProfile({ studentId }: { studentId: string }) {
                   <td>{c.scenarioTitle ?? '—'}</td>
                   <td className="text-[12px] whitespace-nowrap text-c-muted">{c.submittedAt ? dateTime(c.submittedAt) : '—'}</td>
                   <td className="text-[12px] whitespace-nowrap text-c-muted">{c.durationSeconds != null ? `${c.durationSeconds} с` : '—'}</td>
-                  <td>{c.status === 'EVALUATED' ? <Badge tone="ok">оценена</Badge> : <Badge tone="warn">ждёт оценки</Badge>}</td>
+                  <td><CardBadge status={c.status} ev={evals[c.id]} /></td>
                 </tr>
               ))}
             </tbody>
