@@ -11,6 +11,10 @@
 - `wrong` — адрес и другое происшествие: модель не должна засчитать чужое;
 - `empty` — «всё спокойно» и пустой разговор: ни правила, ни модель баллов за факты не дают.
 
+В сервисе зачёт фактов судьёй выключен по умолчанию; бенч включает его
+(`DDS_JUDGE_REPORT_FACTS=1`), если переменная не задана. `DDS_JUDGE_REPORT_FACTS=0` — замер
+судьи без фактов (только время).
+
 Время — весь `evaluate_card` (правила, промпт, генерация, разбор). Ответ после
 `JUDGE_TIMEOUT_S` — тайм-аут, итог по правилам (`evaluatedBy == "rules"`).
 
@@ -27,7 +31,7 @@ import statistics
 import time
 from typing import Any
 
-from dds_ai.bridge.evaluate import JUDGE_TIMEOUT_S, evaluate_card
+from dds_ai.bridge.evaluate import JUDGE_TIMEOUT_S, REPORT_FACTS_ENV, evaluate_card
 
 CHIEF = "chief-1"
 
@@ -250,6 +254,7 @@ def main() -> None:
     p.add_argument("--n-ctx", type=int, default=4096)
     p.add_argument("--json")
     args = p.parse_args()
+    os.environ.setdefault(REPORT_FACTS_ENV, "1")
     report = run(args)
     summary = {k: v for k, v in report.items() if k != "rows"}
     print(json.dumps(summary, ensure_ascii=False, indent=2))

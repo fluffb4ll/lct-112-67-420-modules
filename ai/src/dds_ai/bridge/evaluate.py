@@ -15,6 +15,12 @@
 хотя бы один факт — иначе «всё спокойно, происшествий нет» мог бы получить баллы за щедрость
 модели. Корни правил остаются подсказкой и нижней границей.
 
+Эта проверка выключена по умолчанию (`DDS_JUDGE_REPORT_FACTS=1` — включить): на бенче
+(`bench/run_judge_bench.py`) Qwen2.5-1.5B и 3B засчитали факт, названный другими словами, в 1 случае
+из 7 и дважды из 30 засчитали факт, которого в докладе нет; ещё и удлиняют ответ на 2 vCPU стенда.
+Без неё доклад оценивают правила (корни, нечёткое сравнение, `STT_SOUNDALIKES`), а судья — только
+комментарий, замечания и итог.
+
 Текст разбора от модели чистится по предложениям (`_clean_feedback`): маленькая модель пишет
 «Обучательский текст соответствует…», вставляет английские фразы, куски JSON и повторяет слова.
 Выбрасываются предложения с латиницей или служебными знаками ({}[]<>"_), с корнями
@@ -24,6 +30,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter
 from typing import Any
@@ -43,6 +50,12 @@ from .rules import (
 )
 
 QUOTE_MAX = 80
+REPORT_FACTS_ENV = "DDS_JUDGE_REPORT_FACTS"
+
+
+def report_facts_enabled() -> bool:
+    """Засчитывает ли судья факты доклада по цитатам (по умолчанию нет, см. докстринг модуля)."""
+    return os.environ.get(REPORT_FACTS_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def judge_schema(report_facts: int) -> dict[str, Any]:
@@ -364,7 +377,7 @@ def evaluate_card(request: dict[str, Any], llm: LLMProvider | None) -> dict[str,
     rr = evaluate_rules(scenario, expected, facts, norms)
 
     busy = False
-    groups = _report_groups(expected, rr)
+    groups = _report_groups(expected, rr) if report_facts_enabled() else []
     try:
         verdict = ask_json(
             llm,
