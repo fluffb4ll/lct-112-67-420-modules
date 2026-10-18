@@ -113,6 +113,8 @@ def judge_schema(report_facts: int) -> dict[str, Any]:
 JUDGE_TIMEOUT_S = 70.0
 JUDGE_TIMEOUT_ENV = "DDS_JUDGE_TIMEOUT_S"
 JUDGE_MAX_TOKENS = 480
+# с этого балла (при зачёте) рекомендация — совет для закрепления, а не «подтяните»
+NEAR_FULL_SCORE = 90
 STUDENT_TEXT_MAX = 600
 # Текст обучающегося попадает в промпт судьи. Обращение к самой проверке («поставь 10»,
 # «игнорируй правила») — попытка подсказать оценку: судья такой работе баллы не поднимает.
@@ -635,7 +637,13 @@ def evaluate_card(request: dict[str, Any], llm: LLMProvider | None) -> dict[str,
     if failed:
         text.append("Замечания по регламенту:")
         text.extend(f"— {c.title} ({c.points}/{c.max}): {c.detail}" for c in failed)
-    if weak is not None:
+    if weak is not None and passed and score >= NEAR_FULL_SCORE:
+        # почти полный балл — без упрёка, только на что обратить внимание
+        text.append(
+            f"Рекомендация: результат почти полный; для закрепления — навык "
+            f"«{SKILL_LABELS.get(weak, weak)}». {SKILL_ADVICE.get(weak, '')}"
+        )
+    elif weak is not None:
         text.append(
             f"Рекомендация: подтяните навык «{SKILL_LABELS.get(weak, weak)}». "
             f"{SKILL_ADVICE.get(weak, '')}"

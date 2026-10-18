@@ -26,4 +26,25 @@ public interface StudyGroupRepository extends JpaRepository<StudyGroupEntity, UU
     LEFT JOIN g.teacher t
     """)
     Page<StudyGroupTableRowDto> findAllForTable(Pageable pageable);
+
+    /** Группы, которые ведёт пользователь или в которых он состоит */
+    @Query(value = """
+    SELECT new com.fluffb4ll.lct112HttpBackend.dto.response.StudyGroupTableRowDto(
+        g.id,
+        g.name,
+        t.id,
+        t.fullName
+    )
+    FROM StudyGroupEntity g
+    LEFT JOIN g.teacher t
+    WHERE t.id = :userId
+       OR EXISTS (SELECT 1 FROM StudyGroupMemberEntity m WHERE m.id.groupId = g.id AND m.id.studentId = :userId)
+    """, countQuery = """
+    SELECT COUNT(g)
+    FROM StudyGroupEntity g
+    LEFT JOIN g.teacher t
+    WHERE t.id = :userId
+       OR EXISTS (SELECT 1 FROM StudyGroupMemberEntity m WHERE m.id.groupId = g.id AND m.id.studentId = :userId)
+    """)
+    Page<StudyGroupTableRowDto> findVisibleForTable(@Param("userId") UUID userId, Pageable pageable);
 }

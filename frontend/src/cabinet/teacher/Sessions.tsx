@@ -23,6 +23,7 @@ import { CardBadge } from '../shared/CardBadge';
 import { useCardEvaluations } from '../../training/cardEvaluations';
 import { pollUntil } from '../../training/pollUntil';
 import { Badge, Button, Checkbox, ConfirmModal, Empty, Input, Modal, Notice, Panel, Select, Table, Textarea } from '../../ui';
+import { startableGroups } from './groupAccess';
 
 /*
  * Занятия — через бэкенд (/api/sessions, ветка mvp).
@@ -176,6 +177,7 @@ export function Sessions() {
 }
 
 function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r: { students: number; cards: number }) => void }) {
+  const { user, role } = useMe();
   const [groups, setGroups] = useState<StudyGroupRow[] | null>(null);
   const [scenarios, setScenarios] = useState<ScenarioRow[] | null>(null);
   const [groupId, setGroupId] = useState('');
@@ -189,7 +191,8 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
   useEffect(() => {
     let alive = true;
     void listStudyGroups(0, 100).then(
-      (p) => alive && setGroups(p ? p.content : null),
+      // занятие можно начать только в своей группе; администратору — в любой
+      (p) => alive && setGroups(p ? startableGroups(p.content, { id: user?.id, isAdmin: role?.kind === 'admin' }) : null),
       () => alive && setGroups(null),
     );
     // в занятие идут только утверждённые сценарии
@@ -200,7 +203,7 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
     return () => {
       alive = false;
     };
-  }, []);
+  }, [user?.id, role?.kind]);
 
   const chosenGroup = groupId || groups?.[0]?.id || '';
 
@@ -228,7 +231,7 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
       footer={
         <>
           <Button onClick={onClose}>Отмена</Button>
-          <Button variant="primary" disabled={busy} onClick={() => void submit()}>
+          <Button variant="primary" disabled={busy || !groups?.length} onClick={() => void submit()}>
             {busy ? 'Запуск…' : 'Начать занятие'}
           </Button>
         </>
@@ -239,6 +242,8 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
 
         {groups === null ? (
           <Notice tone="warn">Сервер не отдаёт учебные группы — занятие назначать некому.</Notice>
+        ) : !groups.length ? (
+          <Notice tone="warn">У вас нет своих учебных групп — создайте группу в разделе «Группы» и зачислите обучающихся.</Notice>
         ) : (
           <Select label="Группа" value={chosenGroup} onChange={(e) => setGroupId(e.target.value)}>
             {groups.map((g) => (

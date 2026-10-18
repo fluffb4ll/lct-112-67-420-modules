@@ -95,6 +95,44 @@ def test_lost_points_recommend_weakest_skill():
     assert "Рекомендация: подтяните навык «Зона ответственности»" in out["aiRecommendations"]
 
 
+def test_near_full_score_advises_without_reproach():
+    events = run(GOOD)
+    events[1]["t"] = 45_000  # карточку открыли позже нормы — минус только за время
+    out = evaluate_card(request(events), None)
+    assert 90 <= out["aiScore"] < 100 and out["passed"] is True
+    assert "подтяните" not in out["aiRecommendations"]
+    assert "для закрепления — навык «Нормативы времени»" in out["aiRecommendations"]
+
+
+def test_full_score_never_names_first_scenario_skill():
+    # первый навык сценария — «zone»; при 100/100 он не должен всплывать в рекомендации
+    out = evaluate_card(request(run(GOOD)), None)
+    rec = next(line for line in out["aiRecommendations"].splitlines() if "Рекомендация" in line)
+    assert "Зона ответственности" not in rec
+
+
+def test_incomplete_comment_on_accepted_card_is_not_profile_reproach():
+    # «Принята» верно, в комментарии не хватает сведений: слабое место — комментарий, а не профиль
+    expected = {
+        **EXPECTED,
+        "path": ["Принята"],
+        "sample": {"Принята": "Принято. На место направлен мастер участка."},
+        "commentMustMention": [["мастер"]],
+    }
+    events = run("Принято, работаем.")
+    events[2]["status"] = "Принята"
+    req = request(events)
+    req["referenceCard"] = {
+        "expected": expected,
+        "scenario": {"title": "Течь в подвале", "skills": ["profile", "report"]},
+    }
+    out = evaluate_card(req, None)
+    content = next(c for c in out["checks"] if c["id"] == "comment_content")
+    assert content["points"] < content["max"] and content["skill"] == "work_progress"
+    assert "Профильные происшествия" not in out["aiRecommendations"]
+    assert "«Статусы хода работ»" in out["aiRecommendations"]
+
+
 def test_wrong_status_is_failed_and_explained():
     events = run(GOOD)
     events[2]["status"] = "Принята"

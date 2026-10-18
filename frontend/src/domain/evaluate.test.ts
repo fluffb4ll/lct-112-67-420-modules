@@ -90,3 +90,43 @@ describe('pyRound', () => {
     expect(evaluate(run('Кировоградская 22, лифт'), scenario).checks.find((c) => c.id === 'report_call')!.points).toBe(8);
   });
 });
+
+describe('рекомендация', () => {
+  it('полный балл — без «Подтяните» и без первого навыка сценария', () => {
+    const ev = evaluate(run('Докладываю: Кировоградская, 22 — застревание в лифте'));
+    expect(ev.score).toBe(100);
+    expect(ev.recommendation.text).toBe('Замечаний нет — переходите к сценариям сложнее.');
+  });
+
+  it('почти полный балл при зачёте — совет для закрепления, без упрёка', () => {
+    const ev = evaluate(run('Докладываю: Кировоградская, 22 — застревание в лифте', { openMs: 45000 }));
+    expect(ev.score).toBe(95);
+    expect(ev.recommendation.skill).toBe('timing');
+    expect(ev.recommendation.text).toMatch(/^Результат почти полный; для закрепления — навык «/);
+    expect(ev.recommendation.text).not.toMatch(/Подтяните/);
+  });
+
+  it('незачёт — по-прежнему «Подтяните» по самому слабому навыку', () => {
+    const ev = evaluate(run('Кировоградская 22, лифт', { status: 'Принята' }));
+    expect(ev.passed).toBe(false);
+    expect(ev.recommendation.text).toMatch(/^Подтяните навык «/);
+  });
+
+  it('неполный комментарий к верной «Принята» — не «Профильные происшествия»', () => {
+    const scenario: Scenario = {
+      ...lift,
+      skills: ['profile'],
+      expected: { ...lift.expected, path: ['Принята'], commentMustMention: [['практик'], ['передан', 'сообщ']] },
+    };
+    const ev = evaluate(run('Докладываю: Кировоградская, 22 — застревание в лифте', { status: 'Принята', comment: 'Принято' }), scenario);
+    expect(ev.checks.find((c) => c.id === 'comment_content')!.skill).toBe('work_progress');
+    expect(ev.recommendation.skill).toBe('work_progress');
+    expect(ev.recommendation.text).not.toMatch(/Профильные/);
+  });
+
+  it('неполный комментарий к ожидаемому отказу — навык «Комментарий к отказу»', () => {
+    const scenario: Scenario = { ...lift, skills: ['zone'] };
+    const ev = evaluate(run('Докладываю: Кировоградская, 22 — застревание в лифте', { comment: 'Не наш адрес' }), scenario);
+    expect(ev.checks.find((c) => c.id === 'comment_content')!.skill).toBe('refusal_comment');
+  });
+});

@@ -12,10 +12,12 @@ import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.EntityType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.EventType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.Permissions;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.UserUpdateException;
 import com.fluffb4ll.lct112HttpBackend.repository.DepartmentRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.RolesRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.UserRepository;
+import com.fluffb4ll.lct112HttpBackend.util.AccessUtil;
 import com.fluffb4ll.lct112HttpBackend.util.HttpRequestUtil;
 import com.fluffb4ll.lct112HttpBackend.util.RegexSecurityUtil;
 import jakarta.transaction.Transactional;
@@ -30,6 +32,8 @@ import org.springframework.stereotype.Service;
 
 import javax.naming.AuthenticationException;
 import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -218,6 +222,20 @@ public class UserUpdateService {
         Page<UserTableRowDto> resultPage = userRepository.findAllForTable(pageable);
 
         return PageResponseDto.from(resultPage);
+    }
+
+    /**
+     * Активные обучающиеся — кого преподаватель может зачислить в группу.
+     * Нужно право на изменение групп или на просмотр пользователей; админских прав на правку пользователей не даёт
+     */
+    @Transactional
+    public List<UserTableRowDto> getStudents(UUID token) throws AuthenticationException {
+        UserEntity currentUser = authService.verifyAuthToken(token, null);
+        Set<String> permissions = currentUser.getRole().getPermissionsAsSet();
+        if (!permissions.contains(Permissions.ADMIN_CAN_EDIT_GROUPS.name())
+                && !permissions.contains(Permissions.ADMIN_CAN_READ_USERINFO.name()))
+            throw new ForbiddenException("You do not have required permissions");
+        return userRepository.findActiveByRoleNameForTable(AccessUtil.ROLE_STUDENT);
     }
 
     private UserEntity verifyAuthToken(UUID token, UserEntity targetUser) throws AuthenticationException {

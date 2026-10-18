@@ -18,6 +18,7 @@ import com.fluffb4ll.lct112HttpBackend.repository.ScenarioRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.SessionRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.StudyGroupMemberRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.StudyGroupRepository;
+import com.fluffb4ll.lct112HttpBackend.util.AccessUtil;
 import com.fluffb4ll.lct112HttpBackend.util.HttpRequestUtil;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.transaction.Transactional;
@@ -59,6 +60,10 @@ public class SessionService {
 
         StudyGroupEntity studyGroup = studyGroupRepository.findById(request.studyGroupId())
                 .orElseThrow(() -> new SessionException("Study group not found"));
+        // занятие назначается только своей группе; администратор — любой
+        if (!AccessUtil.canManageGroup(currentUser, studyGroup)) {
+            throw new ForbiddenException("You can start sessions only for your own study groups");
+        }
 
         List<ScenarioEntity> scenarios = scenarioRepository.findAllById(request.scenarioIds());
         if (scenarios.size() != request.scenarioIds().size()) {
@@ -243,6 +248,9 @@ public class SessionService {
         SessionEntity session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new SessionException("Session not found"));
 
+        if (!canManageSession(currentUser, session)) {
+            throw new ForbiddenException("You can end only sessions of your own study groups");
+        }
         if (session.getEndedAt() != null) {
             throw new SessionException("Session is already ended");
         }
@@ -355,6 +363,14 @@ public class SessionService {
     /** Карточку выдаём, если сценарий утверждён или обучающийся уже сдал по нему карточку */
     private static boolean isDeliverable(ScenarioEntity scenario, boolean isSubmitted) {
         return scenario != null && (scenario.getStatus() == ScenarioStatus.APPROVED || isSubmitted);
+    }
+
+    /** Завершить занятие может администратор, преподаватель, который его начал, или преподаватель группы */
+    private static boolean canManageSession(UserEntity user, SessionEntity session) {
+        if (AccessUtil.isAdmin(user)) return true;
+        boolean startedIt = session.getTeacher() != null && user.getId() != null
+                && user.getId().equals(session.getTeacher().getId());
+        return startedIt || AccessUtil.isTeacherOf(user, session.getStudyGroup());
     }
 
     private void verifyTeacherOrAdmin(UserEntity user) throws AuthenticationException {
