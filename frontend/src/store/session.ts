@@ -75,21 +75,27 @@ function announce(userId: string | null) {
   }
 }
 
+/** Номер сессии вкладки: растёт при входе, выходе и истечении — по нему сверка узнаёт запоздавший ответ */
+let generation = 0;
+
 export const useSession = create<SessionState>((set) => ({
   user: load(),
   notice: takeNotice(),
   signIn: (user) => {
+    generation++;
     save(user);
     set({ user, notice: '' });
     announce(user.id);
   },
   signOut: async () => {
+    generation++;
     clear();
     set({ user: null, notice: '' });
     await logoutRequest();
     announce(null);
   },
   expire: () => {
+    generation++;
     clear();
     set({ user: null, notice: 'Сессия истекла. Войдите снова.' });
   },
@@ -119,9 +125,17 @@ export function verifySessionUser(): Promise<void> {
     recheck = true;
     return checking;
   }
+  const asked = generation;
+  // пока ждали ответ, во вкладке вошли или вышли: ответ про прежнего пользователя — сверить заново
+  const stale = () => {
+    if (asked === generation) return false;
+    recheck = true;
+    return true;
+  };
   checking = (async () => {
     try {
       const server = await meRequest();
+      if (stale()) return;
       const local = useSession.getState().user;
       if (!local) return;
       if (server?.id !== local.id) {
@@ -144,13 +158,15 @@ export function verifySessionUser(): Promise<void> {
         useSession.setState({ user: server });
       }
     } catch (e) {
+      if (stale()) return;
       if (e instanceof ApiError && e.status === 401 && useSession.getState().user) useSession.getState().expire();
     } finally {
       checking = null;
-    }
-    if (recheck) {
-      recheck = false;
-      await verifySessionUser();
+      // и после return из try: запоздавший ответ тоже требует повторной сверки
+      if (recheck) {
+        recheck = false;
+        await verifySessionUser();
+      }
     }
   })();
   return checking;

@@ -122,6 +122,59 @@ describe('verifySessionUser', () => {
     expect(s.reload).toHaveBeenCalledOnce();
   });
 
+  it('пока шла сверка, во вкладке вышли и вошли другим — запоздалый ответ прежнего не сбрасывает новую сессию', async () => {
+    const s = await loadSession(teacher);
+    let answerFirst: (r: Response) => void = () => {};
+    const me: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (!url.includes('/auth/me')) return new Response(null, { status: 200 });
+        me.push(url);
+        if (me.length === 1) return new Promise<Response>((r) => (answerFirst = r));
+        return new Response(JSON.stringify(student), { status: 200 });
+      }),
+    );
+
+    const running = s.verifySessionUser();
+    await s.useSession.getState().signOut();
+    s.useSession.getState().signIn(student);
+    answerFirst(new Response(JSON.stringify(teacher), { status: 200 }));
+    await running;
+
+    expect(s.reload).not.toHaveBeenCalled();
+    expect(s.useSession.getState().user?.id).toBe('s1');
+    expect(s.useSession.getState().notice).toBe('');
+    expect(session.getItem('dds-trainer-session-notice')).toBeNull();
+    // новый пользователь сверен отдельным запросом
+    expect(me).toHaveLength(2);
+  });
+
+  it('запоздалый 401 по прежней сессии не объявляет новую истёкшей', async () => {
+    const s = await loadSession(teacher);
+    let answerFirst: (r: Response) => void = () => {};
+    let calls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls++;
+        if (calls === 1) return new Promise<Response>((r) => (answerFirst = r));
+        return new Response(JSON.stringify(student), { status: 200 });
+      }),
+    );
+
+    const running = s.verifySessionUser();
+    s.useSession.getState().expire();
+    s.useSession.getState().signIn(student);
+    answerFirst(new Response(null, { status: 401 }));
+    await running;
+
+    expect(s.useSession.getState().user?.id).toBe('s1');
+    expect(s.useSession.getState().notice).toBe('');
+    expect(s.reload).not.toHaveBeenCalled();
+    expect(calls).toBe(2);
+  });
+
   it('вход сообщает другим вкладкам через localStorage', async () => {
     const s = await loadSession(null);
     s.useSession.getState().signIn(teacher);
