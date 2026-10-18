@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { clearLive, markRead } from '../../api';
+import { clearLive } from '../../api';
 import { useDb } from '../../api/db';
 import { navigate, useRoute } from '../../app/router';
 import { IcBook, IcChart, IcList } from '../../arm/icons';
@@ -10,9 +10,9 @@ import type { Attempt, Scenario, TrainingMode } from '../../domain/types';
 import { useMe } from '../../store/session';
 import { useRun } from '../../store/training';
 import { useCardEvaluations } from '../../training/cardEvaluations';
-import { MODE_DESCRIPTIONS, MODE_LABELS } from '../../training/labels';
+import { MODE_LABELS } from '../../training/labels';
 import { attemptResult } from '../../training/serverScore';
-import { Badge, Button, Empty, Notice, Panel, Stat, Table } from '../../ui';
+import { Badge, Button, Empty, Panel, Stat, Table } from '../../ui';
 import { HBars } from '../../ui/charts';
 import { CabinetLayout } from '../CabinetLayout';
 import { AttemptDetails } from '../shared/AttemptDetails';
@@ -64,11 +64,7 @@ export function StudentHome() {
   const ratings = computeRatings(mine, scMap);
   const ready = readiness(ratings);
   const weak = weakestSkill(ratings);
-  const sessions = db.sessions.filter((s) => s.groupId === user.groupId && s.status !== 'finished');
-  const messages = db.messages.filter((m) => m.to === user.id && !m.read);
-
-  const assignedIds = new Set(db.sessions.filter((s) => s.groupId === user.groupId).flatMap((s) => s.scenarioIds));
-  const pool = scenarios.filter((s) => s.status === 'approved' && s.serviceKind === service.kind && (assignedIds.has(s.id) || serverIds.has(s.id)));
+  const pool = scenarios.filter((s) => s.status === 'approved' && s.serviceKind === service.kind && serverIds.has(s.id));
   const diff = recommendDifficulty(ratings, weak);
   const recommended = [...pool]
     .sort((a, b) => Number(b.skills.includes(weak)) - Number(a.skills.includes(weak)) || Math.abs(a.difficulty - diff) - Math.abs(b.difficulty - diff))
@@ -89,56 +85,10 @@ export function StudentHome() {
 
   return (
     <CabinetLayout nav={nav} active={tab} title={titles[tab] ?? 'Занятия'}>
-      {messages.length > 0 && (
-        <div className="mb-4">
-          <Notice tone="warn">
-            {messages.map((m) => (
-              <div key={m.id}>
-                <b>Преподаватель:</b> {m.text}
-              </div>
-            ))}
-            <button className="mt-1 text-[13px] underline" onClick={() => markRead(messages.map((m) => m.id))}>
-              Прочитано
-            </button>
-          </Notice>
-        </div>
-      )}
-
       {tab === 'lessons' && (
         <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
           <div className="flex flex-col gap-4">
             <ServerLesson user={user} groupId={groupId} />
-            <Panel title="Занятия группы">
-              {sessions.length === 0 && <Empty>Сейчас нет назначенных занятий.</Empty>}
-              <div className="flex flex-col gap-3">
-                {sessions.map((s) => {
-                  const done = db.attempts.filter((a) => a.sessionId === s.id && a.studentId === user.id && a.evaluation).length;
-                  return (
-                    <div key={s.id} className="flex flex-wrap items-center justify-between gap-3 border border-c-line p-3">
-                      <div className="min-w-0">
-                        <div className="font-medium">{s.title}</div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[13px] text-c-muted">
-                          <Badge tone="accent">{MODE_LABELS[s.mode]}</Badge>
-                          <span>
-                            {s.scenarioIds.length} карт. · открыть за {s.normOpenSec} с · отработать за {s.normTotalSec / 60} мин
-                          </span>
-                          {done > 0 && <span>· пройдено попыток: {done}</span>}
-                        </div>
-                        <div className="mt-1 text-[12px] text-c-muted">{MODE_DESCRIPTIONS[s.mode]}</div>
-                      </div>
-                      {s.status === 'running' ? (
-                        <Button variant="primary" onClick={() => run(s.title, s.mode, s.scenarioIds, s.id, { openSec: s.normOpenSec, totalSec: s.normTotalSec, passScore: s.passScore })}>
-                          Начать
-                        </Button>
-                      ) : (
-                        <Badge>Ожидает старта преподавателем</Badge>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </Panel>
-
             <Panel title="Самостоятельная тренировка">
               {recommended.length === 0 ? (
                 <Empty>{emptyPracticeText(info ? groupId : undefined, loadStatus, loadedGroupId)}</Empty>
