@@ -257,8 +257,11 @@ CRITIQUE_ROOTS = (
 )
 # «ошибок нет», «без ошибок» — похвала, хоть и с отрицанием
 NO_FAULTS = re.compile(
-    r"\b(?:нет|без)\s+(?:ошиб|замечан|нарушен)|\b(?:ошиб\w*|замечан\w*|нарушен\w*)\s+нет\b"
+    r"\b(?:нет|без|ни\s+одн\w*)\s+(?:ошиб|замечан|нарушен)"
+    r"|\b(?:ошиб\w*|замечан\w*|нарушен\w*)\s+нет\b"
 )
+# цитаты: статус «Не принята», текст комментария «Не обслуживаем…» — не упрёк
+QUOTED = re.compile(r"«[^»]*»|\"[^\"]*\"|“[^”]*”")
 
 
 def _clauses(sentence: str) -> list[str]:
@@ -292,7 +295,7 @@ def _criticizes_passed(
     low = sentence.lower()
     if not solid_topics or any(t in low for t in open_topics):
         return False
-    for clause in _clauses(sentence):
+    for clause in _clauses(QUOTED.sub(" ", sentence)):
         if NO_FAULTS.search(clause):
             continue
         words = _ru_words(clause)

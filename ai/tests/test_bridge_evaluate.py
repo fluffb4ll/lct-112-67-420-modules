@@ -443,7 +443,12 @@ def test_critique_of_fully_credited_check_is_dropped(sentence):
 
 
 def test_praise_and_advice_about_fully_credited_check_are_kept():
-    sentences = ["Комментарий полный, ошибок нет.", "Комментарий можно дополнить телефоном УК."]
+    sentences = [
+        "Комментарий полный, ошибок нет.",
+        "В комментарии ни одной ошибки.",
+        "Комментарий можно дополнить телефоном УК.",
+        "Верно: статус «Не принята», комментарий «Не обслуживаем, передано в УК».",
+    ]
     out = evaluate_card(request(run(GOOD)), judge_says(" ".join(sentences)))
     for sentence in sentences:
         assert sentence in out["aiRecommendations"]
