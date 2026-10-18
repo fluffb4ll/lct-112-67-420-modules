@@ -168,13 +168,21 @@ class Recording:
         self.llm = llm
         self.model_ref = llm.model_ref
         self.last = ""
+        self.tokens = (0, 0)
+
+    def _count(self, prompt: str, out: str) -> None:
+        # без шаблона чата — оценка снизу; доля генерации видна, по ней пересчитывается время стенда
+        n = lambda s: len(self.llm._llm.tokenize(s.encode(), add_bos=False))  # noqa: E731
+        self.tokens = (n(prompt), n(out))
 
     def complete(self, prompt: str, *, max_tokens: int) -> str:
         self.last = self.llm.complete(prompt, max_tokens=max_tokens)
+        self._count(prompt, self.last)
         return self.last
 
     def complete_json(self, prompt: str, **kw: Any) -> str:
         self.last = self.llm.complete_json(prompt, **kw)
+        self._count(prompt, self.last)
         return self.last
 
 
@@ -187,7 +195,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     rows = []
     for sid, kind, report in cases():
         t = time.perf_counter()
-        llm.last = ""
+        llm.last, llm.tokens = "", (0, 0)
         out = evaluate_card(request(sid, report), llm)
         took = time.perf_counter() - t
         rep = next(c for c in out["checks"] if c["id"] == "report_call")
@@ -199,6 +207,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "by": rep["by"],
             "evaluatedBy": out["evaluatedBy"],
             "seconds": round(took, 2),
+            "prompt_tokens": llm.tokens[0],
+            "output_tokens": llm.tokens[1],
             "detail": rep["detail"],
             "raw": llm.last,
         }
@@ -227,6 +237,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "false_credit": sum(r["points"] > r["expected"] for r in rows),
         "seconds_median": round(statistics.median(secs), 1),
         "seconds_max": round(max(secs), 1),
+        "prompt_tokens_median": statistics.median(r["prompt_tokens"] for r in rows),
+        "output_tokens_median": statistics.median(r["output_tokens"] for r in rows),
         "rows": rows,
     }
 
