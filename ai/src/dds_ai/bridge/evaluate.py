@@ -259,15 +259,18 @@ CRITIQUE_ROOTS = (
     "пропущ",
     "забы",
 )
-# «ошибок нет», «без ошибок», «не допустили ни одной ошибки» — похвала, хоть и с отрицанием
-_FAULT = r"(?:ошиб|замечан|нарушен)\w*"
+# «ошибок нет», «без ошибок», «не допустили ни одной ошибки» — похвала, хоть и с отрицанием;
+# отсутствие — в родительном падеже: «не было указано нарушение» — упрёк
+_FAULT = r"(?:ошибок|ошибки|нарушений|нарушения|замечаний|замечания)\b"
+# между «не допустили» и «ошибок» — только «ни одной», «никаких», «грубых»
+_QUANTIFIERS = r"(?:ни\s+одн\w*\s+|никак\w*\s+|\w+(?:ых|их)\s+){0,2}"
 _NOT_FOUND = (
     r"не\s+(?:допустил\w*|допускал\w*|допущен\w*|было|выявлен\w*|обнаружен\w*"
     r"|найден\w*|замечен\w*|сделал\w*)"
 )
 NO_FAULTS = re.compile(
     rf"\b(?:нет|без|ни\s+одн\w*|никак\w*)\s+{_FAULT}"
-    rf"|\b{_NOT_FOUND}\s+(?:\w+\s+){{0,2}}?{_FAULT}"
+    rf"|\b{_NOT_FOUND}\s+{_QUANTIFIERS}{_FAULT}"
     rf"|\b{_FAULT}\s+(?:\w+\s+){{0,2}}?(?:нет\b|{_NOT_FOUND})"
 )
 # цитаты: статус «Не принята», текст комментария «Не обслуживаем…» — не мнение модели
@@ -293,7 +296,8 @@ def _contradicts_rules(sentence: str, weak_topics: tuple[str, ...], failed: bool
     """
     clauses = _clauses(QUOTED.sub(" ", sentence))
     # «ошибок нет, но статус выбран неверно» — не похвала всей работе
-    critiques = any(_critique(_ru_words(NO_FAULTS.sub(" ", c))) for c in clauses)
+    rest_words = [_ru_words(NO_FAULTS.sub(" ", c)) for c in clauses]
+    critiques = any(_critique(w) or NEGATIONS & set(w) for w in rest_words)
     for clause in clauses:
         no_faults = bool(NO_FAULTS.search(clause))
         rest = NO_FAULTS.sub(" ", clause)
