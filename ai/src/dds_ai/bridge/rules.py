@@ -291,7 +291,11 @@ def extract_facts(
     last_t = (finished or (events[-1] if events else {})).get("t", 0) or 0
     calls = [e for e in events if e.get("kind") == "call_ended"]
     chief_calls = [c for c in calls if c.get("contactId") in chief_ids] if chief_ids else calls
-    report = " ".join(c.get("transcript") or "" for c in chief_calls).strip() or fallback_report
+    report = " ".join(c.get("transcript") or "" for c in chief_calls).strip()
+    if not events:
+        # старый клиент без журнала; с журналом заметки — расшифровки всех звонков,
+        # и пустой доклад руководителю засчитывался бы по звонку в УК (фронт так не считает)
+        report = fallback_report
     total = last_t / 1000 if last_t else (total_sec_hint or 0)
     return Facts(
         path=[e["status"] for e in sets],

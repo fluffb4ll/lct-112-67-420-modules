@@ -85,6 +85,18 @@ class Submit(BaseModel):
 Models = tuple[LLMProvider | None, SemanticJudge | None]
 
 
+def _llm_threads() -> int:
+    """Потоки llama.cpp: DDS_LLM_N_THREADS или все доступные процессу ядра.
+
+    Без явного числа llama-cpp-python берёт половину ядер: на стенде с 2 vCPU это один поток.
+    """
+    raw = os.environ.get("DDS_LLM_N_THREADS", "").strip()
+    if raw:
+        return max(1, int(raw))
+    affinity = getattr(os, "sched_getaffinity", None)
+    return max(1, len(affinity(0)) if affinity else os.cpu_count() or 1)
+
+
 def _load_models() -> Models:
     """LLM из DDS_LLM_MODEL_PATH; не задана — (None, None). Нет файла, пакета, сбой — исключение."""
     path = os.environ.get("DDS_LLM_MODEL_PATH")
@@ -99,6 +111,7 @@ def _load_models() -> Models:
         path,
         model_name=os.environ.get("DDS_LLM_MODEL_NAME") or None,
         n_ctx=int(os.environ.get("DDS_LLM_N_CTX", "4096")),
+        n_threads=_llm_threads(),
     )
     return llm, LLMSemanticJudge(llm)
 

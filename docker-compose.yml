@@ -60,6 +60,10 @@ services:
       DDS_TTS_VOICE_PATH_MALE: /models/piper/ru_RU-denis-medium.onnx
       # дефолты — как в коде ИИ-контура (ai/src/dds_ai)
       DDS_LLM_MODEL_NAME: ${DDS_LLM_MODEL_NAME:-}
+      # потоки llama.cpp; пусто — все ядра контейнера (по умолчанию библиотека берёт половину)
+      DDS_LLM_N_THREADS: ${DDS_LLM_N_THREADS:-}
+      # 1 — судья засчитывает факты доклада по цитатам; по умолчанию доклад оценивают только правила
+      DDS_JUDGE_REPORT_FACTS: ${DDS_JUDGE_REPORT_FACTS:-0}
       DDS_LLM_LOCK_TIMEOUT_S: ${DDS_LLM_LOCK_TIMEOUT_S:-20}
       DDS_STT_MAX_BYTES: ${DDS_STT_MAX_BYTES:-10485760}
       DDS_STT_MAX_SECONDS: ${DDS_STT_MAX_SECONDS:-120}
