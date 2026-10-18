@@ -424,3 +424,35 @@ def test_criticism_and_advice_about_zeroed_check_are_kept(sentence):
     events[2]["status"] = "Принята"
     out = evaluate_card(request(events), judge_says(sentence))
     assert sentence in out["aiRecommendations"]
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # на стенде: 100 из 100, комментарий полный, а разбор ИИ — упрёк за комментарий
+        "Диспетчер не предоставил полный и точный комментарий.",
+        "Комментарий не содержит сведений о том, что информация передана в их диспетчерскую.",
+        "Комментарий недостаточно подробный.",
+    ],
+)
+def test_critique_of_fully_credited_check_is_dropped(sentence):
+    out = evaluate_card(request(run(GOOD)), judge_says(sentence))
+    assert {c["id"]: c for c in out["checks"]}["comment_content"]["points"] == 15
+    assert sentence not in out["aiRecommendations"]
+    assert "Разбор: Вы отработали карточку по регламенту." in out["aiRecommendations"]
+
+
+def test_praise_and_advice_about_fully_credited_check_are_kept():
+    sentences = ["Комментарий полный, ошибок нет.", "Комментарий можно дополнить телефоном УК."]
+    out = evaluate_card(request(run(GOOD)), judge_says(" ".join(sentences)))
+    for sentence in sentences:
+        assert sentence in out["aiRecommendations"]
+
+
+def test_critique_touching_check_with_lost_points_is_kept():
+    # статус снят — упрёк про статус остаётся, даже рядом с засчитанным комментарием
+    events = run(GOOD)
+    events[2]["status"] = "Принята"
+    sentence = "Статус выбран неверно, а комментарий не содержит сведений об УК."
+    out = evaluate_card(request(events), judge_says(sentence))
+    assert sentence in out["aiRecommendations"]

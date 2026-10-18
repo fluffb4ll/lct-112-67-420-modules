@@ -243,6 +243,22 @@ GENERIC_PRAISE = (
     "успешн",
 )
 NEGATIONS = {"не", "нет", "ни", "без", "нужно", "надо", "следует", "стоит", "забыли"}
+# упрёк: «не указал», «нет сведений», «недостаточно», «отсутствует»
+CRITIQUE_WORDS = {"не", "нет", "без", "ни"}
+CRITIQUE_ROOTS = (
+    "недостаточ",
+    "неполн",
+    "неточн",
+    "неверн",
+    "неправильн",
+    "отсутств",
+    "наруш",
+    "упущ",
+)
+# «ошибок нет», «без ошибок» — похвала, хоть и с отрицанием
+NO_FAULTS = re.compile(
+    r"\b(?:нет|без)\s+(?:ошиб|замечан|нарушен)|\b(?:ошиб\w*|замечан\w*|нарушен\w*)\s+нет\b"
+)
 
 
 def _clauses(sentence: str) -> list[str]:
@@ -266,16 +282,48 @@ def _contradicts_rules(sentence: str, weak_topics: tuple[str, ...], failed: bool
     return False
 
 
+def _criticizes_passed(
+    sentence: str, solid_topics: tuple[str, ...], open_topics: tuple[str, ...]
+) -> bool:
+    """Упрёк за то, что правила засчитали полностью («комментарий не содержит…» при 15 из 15).
+
+    Если в предложении есть и тема недобранной проверки — оставляем: упрёк может быть о ней.
+    """
+    low = sentence.lower()
+    if not solid_topics or any(t in low for t in open_topics):
+        return False
+    for clause in _clauses(sentence):
+        if NO_FAULTS.search(clause):
+            continue
+        words = _ru_words(clause)
+        critique = bool(CRITIQUE_WORDS & set(words)) or any(
+            w.startswith(CRITIQUE_ROOTS) for w in words
+        )
+        if critique and any(t in clause for t in solid_topics):
+            return True
+    return False
+
+
 def _clean_feedback(
     summary: Any, remarks: Any, rr: RuleResult | None = None, passed: bool = True
 ) -> tuple[str, list[str]]:
-    """Разбор модели без мусора и без похвалы вопреки правилам: (итог, замечания).
+    """Разбор модели без мусора, без похвалы и упрёков вопреки правилам: (итог, замечания).
 
     Пустые — если ничего годного не осталось.
     """
     seen: set[tuple[str, ...]] = set()
     weak = [c for c in rr.checks if c.points * 2 < c.max] if rr else []
     weak_topics = tuple({r for c in weak for r in CHECK_TOPIC_ROOTS.get(c.id, ())})
+    # темы проверок с полным баллом, которых не касается ни одна недобранная проверка
+    checks = rr.checks if rr else []
+    open_topics = {r for c in checks if c.points < c.max for r in CHECK_TOPIC_ROOTS.get(c.id, ())}
+    full = {
+        r
+        for c in checks
+        if c.max > 0 and c.points >= c.max
+        for r in CHECK_TOPIC_ROOTS.get(c.id, ())
+    }
+    solid_topics = tuple(full - open_topics)
 
     def keep(text: Any) -> list[str]:
         out = []
@@ -284,6 +332,8 @@ def _clean_feedback(
             if not sentence or _junk(sentence) or key in seen:
                 continue
             if _contradicts_rules(sentence, weak_topics, not passed):
+                continue
+            if _criticizes_passed(sentence, solid_topics, tuple(open_topics)):
                 continue
             seen.add(key)
             out.append(sentence)
