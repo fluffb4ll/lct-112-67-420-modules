@@ -111,6 +111,28 @@ def test_full_score_never_names_first_scenario_skill():
     assert "Зона ответственности" not in rec
 
 
+def test_incomplete_comment_on_accepted_card_is_not_profile_reproach():
+    # «Принята» верно, в комментарии не хватает сведений: слабое место — комментарий, а не профиль
+    expected = {
+        **EXPECTED,
+        "path": ["Принята"],
+        "sample": {"Принята": "Принято. На место направлен мастер участка."},
+        "commentMustMention": [["мастер"]],
+    }
+    events = run("Принято, работаем.")
+    events[2]["status"] = "Принята"
+    req = request(events)
+    req["referenceCard"] = {
+        "expected": expected,
+        "scenario": {"title": "Течь в подвале", "skills": ["profile", "report"]},
+    }
+    out = evaluate_card(req, None)
+    content = next(c for c in out["checks"] if c["id"] == "comment_content")
+    assert content["points"] < content["max"] and content["skill"] == "work_progress"
+    assert "Профильные происшествия" not in out["aiRecommendations"]
+    assert "«Статусы хода работ»" in out["aiRecommendations"]
+
+
 def test_wrong_status_is_failed_and_explained():
     events = run(GOOD)
     events[2]["status"] = "Принята"

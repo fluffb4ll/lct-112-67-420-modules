@@ -397,12 +397,16 @@ def evaluate_rules(
     hit, missing = match_groups(" ".join(facts.comments), comment_groups)
     total = len(comment_groups)
     pts = mx if total == 0 else round(hit / total * mx)
+    # неполный комментарий — это про отказ или про ход работ, а не «профильные происшествия»:
+    # иначе при верном «Принята» рекомендация упрекала бы в отказе от профильного вызова
     skill = (
         "refusal_comment"
         if "refusal_comment" in skills
         else "work_progress"
         if "work_progress" in skills
-        else "profile"
+        else "refusal_comment"
+        if want in COMMENT_REQUIRED
+        else "work_progress"
     )
     if total == 0:
         detail = "Особых требований к тексту нет"
