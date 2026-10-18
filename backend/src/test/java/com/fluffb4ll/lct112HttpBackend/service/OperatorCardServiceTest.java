@@ -5,9 +5,12 @@ import com.fluffb4ll.lct112HttpBackend.dto.card.SubmittedCardDto;
 import com.fluffb4ll.lct112HttpBackend.dto.request.SubmitOperatorCardRequestDto;
 import com.fluffb4ll.lct112HttpBackend.entity.RoleEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.ScenarioEntity;
+import com.fluffb4ll.lct112HttpBackend.entity.OperatorCardEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.SessionEntity;
+import com.fluffb4ll.lct112HttpBackend.entity.StudyGroupEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.ScenarioStatus;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.OperatorCardException;
 import com.fluffb4ll.lct112HttpBackend.repository.EvaluationRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
@@ -37,6 +40,7 @@ class OperatorCardServiceTest {
     private final UUID token = UUID.randomUUID();
 
     private OperatorCardRepository operatorCardRepository;
+    private EvaluationRepository evaluationRepository;
     private EvaluationService evaluationService;
     private Executor aiEvaluationExecutor;
     private ScenarioRepository scenarioRepository;
@@ -48,6 +52,7 @@ class OperatorCardServiceTest {
     @BeforeEach
     void setUp() throws Exception {
         operatorCardRepository = mock(OperatorCardRepository.class);
+        evaluationRepository = mock(EvaluationRepository.class);
         SessionRepository sessionRepository = mock(SessionRepository.class);
         scenarioRepository = mock(ScenarioRepository.class);
         AuthService authService = mock(AuthService.class);
@@ -55,7 +60,7 @@ class OperatorCardServiceTest {
         aiEvaluationExecutor = mock(Executor.class);
         service = new OperatorCardService(
                 operatorCardRepository,
-                mock(EvaluationRepository.class),
+                evaluationRepository,
                 sessionRepository,
                 scenarioRepository,
                 mock(StudyGroupMemberRepository.class),
@@ -86,6 +91,28 @@ class OperatorCardServiceTest {
     @AfterEach
     void tearDown() {
         TransactionSynchronizationManager.clearSynchronization();
+    }
+
+    @Test
+    void foreignCardIsForbidden() throws Exception {
+        UserEntity owner = mock(UserEntity.class);
+        when(owner.getId()).thenReturn(UUID.randomUUID());
+        OperatorCardEntity card = OperatorCardEntity.builder().id(UUID.randomUUID()).student(owner).session(session).build();
+        when(operatorCardRepository.findById(card.getId())).thenReturn(java.util.Optional.of(card));
+
+        // 403, не 401: на 401 фронт считает сессию истёкшей и разлогинивает
+        assertThrows(ForbiddenException.class, () -> service.getCard(token, card.getId()));
+        verifyNoInteractions(evaluationRepository);
+    }
+
+    @Test
+    void submitToForeignGroupSessionIsForbidden() {
+        StudyGroupEntity group = mock(StudyGroupEntity.class);
+        when(group.getId()).thenReturn(UUID.randomUUID());
+        session.setStudyGroup(group);
+
+        assertThrows(ForbiddenException.class, () -> service.submitCard(token, request));
+        verify(operatorCardRepository, never()).save(any());
     }
 
     @Test

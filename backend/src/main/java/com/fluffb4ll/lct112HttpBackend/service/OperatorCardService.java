@@ -14,6 +14,7 @@ import com.fluffb4ll.lct112HttpBackend.model.enums.EntityType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.EventType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.OperatorCardStatus;
 import com.fluffb4ll.lct112HttpBackend.model.enums.ScenarioStatus;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.OperatorCardException;
 import com.fluffb4ll.lct112HttpBackend.repository.EvaluationRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
@@ -88,7 +89,7 @@ public class OperatorCardService {
                     currentUser.getId()
             );
             if (!isMember && !"ROLE_ADMIN".equals(currentUser.getRole().getName())) {
-                throw new OperatorCardException("User is not a member of the study group for this session");
+                throw new ForbiddenException("You do not have permission to submit to this session: not a member of its study group");
             }
         }
 
@@ -204,7 +205,7 @@ public class OperatorCardService {
         boolean isAdmin = currentUser.getRole() != null && "ROLE_ADMIN".equals(currentUser.getRole().getName());
 
         if (!isOwner && !isTeacherOfSession && !isAdmin) {
-            throw new AuthenticationException("You do not have permission to view this card");
+            throw new ForbiddenException("You do not have permission to view this card");
         }
 
         EvaluationEntity evaluation = evaluationRepository.findByCardId(cardId).orElse(null);

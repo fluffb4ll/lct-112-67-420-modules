@@ -11,6 +11,7 @@ import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.AiEvaluationStatus;
 import com.fluffb4ll.lct112HttpBackend.model.enums.OperatorCardStatus;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.AiEvaluationUnavailableException;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.repository.EvaluationRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -301,10 +302,10 @@ class EvaluationServiceTest {
         UserEntity otherStudent = user("ROLE_STUDENT");
         when(authService.verifyAuthToken(token, null)).thenReturn(otherStudent);
 
-        AuthenticationException e = assertThrows(AuthenticationException.class,
+        // 403, не 401: на 401 фронт считает сессию истёкшей и разлогинивает
+        ForbiddenException e = assertThrows(ForbiddenException.class,
                 () -> service.getEvaluationByCardId(token, card.getId()));
 
-        // «permission» в тексте — иначе фронт сочтёт 401 истёкшей сессией и разлогинит
         assertTrue(e.getMessage().contains("permission"));
         verify(evaluationRepository, never()).findByCardId(any());
     }
@@ -366,8 +367,9 @@ class EvaluationServiceTest {
 
     @Test
     void staleThresholdCoversWaitInFullAiQueue() {
-        // Ручной запуск в хвосте полной очереди: ceil(50 / 4) волн чужих вызовов + свой, каждый до 5 + 90 с
-        Duration worstQueuedRun = Duration.ofMillis(5_000 + 90_000).multipliedBy(50 / 4 + 1 + 1);
+        // Ручной запуск в хвосте полной очереди: ceil(50 / 4) волн чужих вызовов + свой, каждый — быстрый обрыв
+        // до 5 с и повтор до 5 + 90 с
+        Duration worstQueuedRun = Duration.ofMillis(5_000 + 5_000 + 90_000).multipliedBy(50 / 4 + 1 + 1);
         assertTrue(EvaluationDto.STALE_PENDING_AFTER.compareTo(worstQueuedRun) > 0,
                 () -> "STALE_PENDING_AFTER=" + EvaluationDto.STALE_PENDING_AFTER + " <= " + worstQueuedRun);
     }

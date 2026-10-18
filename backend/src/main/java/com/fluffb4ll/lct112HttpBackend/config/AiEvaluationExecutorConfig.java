@@ -21,10 +21,11 @@ public class AiEvaluationExecutorConfig {
     public static final int QUEUE_CAPACITY = 50;
 
     /**
-     * Самый долгий вызов ИИ: app.ai.connect-timeout-ms + app.ai.read-timeout-ms из application.yaml (5 с + 90 с).
+     * Самый долгий вызов ИИ: быстрый обрыв протухшего соединения (короче connect-таймаута) и один повтор
+     * целиком — 5 с + (app.ai.connect-timeout-ms + app.ai.read-timeout-ms) из application.yaml = 5 + 5 + 90 с.
      * Таймауты переопределяются через env, этот бюджет — нет: поднимая их, поднимите и его.
      */
-    public static final Duration AI_CALL_BUDGET = Duration.ofSeconds(95);
+    public static final Duration AI_CALL_BUDGET = Duration.ofSeconds(100);
 
     /**
      * Сколько может пройти от постановки задачи в полную очередь до конца её вызова ИИ:
