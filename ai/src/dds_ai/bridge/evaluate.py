@@ -261,7 +261,10 @@ CRITIQUE_ROOTS = (
 )
 # «ошибок нет», «без ошибок», «не допустили ни одной ошибки» — похвала, хоть и с отрицанием
 _FAULT = r"(?:ошиб|замечан|нарушен)\w*"
-_NOT_FOUND = r"не\s+(?:допустил\w*|допущен\w*|было|выявлен\w*|обнаружен\w*|найден\w*|сделал\w*)"
+_NOT_FOUND = (
+    r"не\s+(?:допустил\w*|допускал\w*|допущен\w*|было|выявлен\w*|обнаружен\w*"
+    r"|найден\w*|замечен\w*|сделал\w*)"
+)
 NO_FAULTS = re.compile(
     rf"\b(?:нет|без|ни\s+одн\w*|никак\w*)\s+{_FAULT}"
     rf"|\b{_NOT_FOUND}\s+(?:\w+\s+){{0,2}}?{_FAULT}"
@@ -270,6 +273,12 @@ NO_FAULTS = re.compile(
 # цитаты: статус «Не принята», текст комментария «Не обслуживаем…» — не мнение модели
 QUOTED = re.compile(r"«[^»]*»|\"[^\"]*\"|“[^”]*”")
 ALL_TOPICS = tuple({r for roots in CHECK_TOPIC_ROOTS.values() for r in roots})
+# повелительное наклонение — совет на будущее: «проверяйте», «не допускайте», «укажите»
+IMPERATIVE_ENDINGS = ("йте", "ьте", "ите", "йтесь", "ьтесь", "итесь")
+
+
+def _critique(words: list[str]) -> bool:
+    return bool(CRITIQUE_WORDS & set(words)) or any(w.startswith(CRITIQUE_ROOTS) for w in words)
 
 
 def _clauses(sentence: str) -> list[str]:
@@ -282,15 +291,18 @@ def _contradicts_rules(sentence: str, weak_topics: tuple[str, ...], failed: bool
     Смотрим по частям предложения: часть с отрицанием или советом («не», «нужно») — не похвала.
     «Без ошибок» — похвала, а не отрицание; цитаты — не мнение модели.
     """
-    for clause in _clauses(QUOTED.sub(" ", sentence)):
+    clauses = _clauses(QUOTED.sub(" ", sentence))
+    # «ошибок нет, но статус выбран неверно» — не похвала всей работе
+    critiques = any(_critique(_ru_words(NO_FAULTS.sub(" ", c))) for c in clauses)
+    for clause in clauses:
         no_faults = bool(NO_FAULTS.search(clause))
         rest = NO_FAULTS.sub(" ", clause)
         words = _ru_words(rest)
         if NEGATIONS & set(words):
             continue
-        # «без ошибок» без темы проверки — похвала всей работе
+        # «без ошибок» без темы проверки и без упрёка рядом — похвала всей работе
         generic = any(g in rest for g in GENERIC_PRAISE) or (
-            no_faults and not any(t in rest for t in ALL_TOPICS)
+            no_faults and not critiques and not any(t in rest for t in ALL_TOPICS)
         )
         if failed and generic:
             return True
@@ -315,9 +327,9 @@ def _criticizes_passed(
         return False
     for clause in _clauses(QUOTED.sub(" ", sentence)):
         words = _ru_words(NO_FAULTS.sub(" ", clause))
-        critique = bool(CRITIQUE_WORDS & set(words)) or any(
-            w.startswith(CRITIQUE_ROOTS) for w in words
-        )
+        if any(w.endswith(IMPERATIVE_ENDINGS) for w in words):
+            continue
+        critique = _critique(words)
         # тема — в другом слове: «ошибка» сама по себе не упрёк грамотности
         topic = " ".join(w for w in words if not w.startswith(CRITIQUE_ROOTS))
         if critique and any(t in topic for t in solid_topics):
