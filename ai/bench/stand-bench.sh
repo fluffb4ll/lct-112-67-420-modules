@@ -50,7 +50,7 @@ if [ -n "$SSH_TARGET" ]; then
   [ "$DRY_RUN" = 1 ] && remote_args+=(--dry-run)
   ssh_cmd=(ssh -p "$SSH_PORT" "$SSH_TARGET")
   echo "копирую ai/src и ai/bench в $SSH_TARGET:$WORK/ai"
-  COPYFILE_DISABLE=1 tar czf - --exclude=__pycache__ --exclude='*.pyc' -C "$AI_ROOT" src bench \
+  COPYFILE_DISABLE=1 tar czf - --no-xattrs --exclude=__pycache__ --exclude='*.pyc' -C "$AI_ROOT" src bench \
     | "${ssh_cmd[@]}" "rm -rf $WORK && mkdir -p $WORK/ai && tar xzf - -C $WORK/ai"
   status=0
   # переменные окружения-переопределения передаются как есть
