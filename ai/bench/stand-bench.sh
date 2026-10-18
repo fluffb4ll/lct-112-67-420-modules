@@ -13,6 +13,7 @@
 #
 # Переопределения: IMAGE=dds-ai:latest VOLUME=dds-trainer_ai_models MODEL=/models/llm/model.gguf
 # BENCH_MEMORY=3g (лимит памяти контейнера бенча) MIN_FREE_MB=2500 (меньше свободной — отказ).
+# FLAGS="0 1" — какие DDS_JUDGE_REPORT_FACTS прогнать; DDS_JUDGE_TIMEOUT_S — срок судьи (пусто — как в коде).
 set -euo pipefail
 
 WORK=/tmp/judge-bench
@@ -56,6 +57,7 @@ if [ -n "$SSH_TARGET" ]; then
   # переменные окружения-переопределения передаются как есть
   "${ssh_cmd[@]}" "IMAGE='${IMAGE:-}' VOLUME='${VOLUME:-}' MODEL='${MODEL:-}' \
     BENCH_MEMORY='${BENCH_MEMORY:-}' MIN_FREE_MB='${MIN_FREE_MB:-}' \
+    FLAGS='${FLAGS:-}' DDS_JUDGE_TIMEOUT_S='${DDS_JUDGE_TIMEOUT_S:-}' \
     bash $WORK/ai/bench/stand-bench.sh $(printf '%q ' "${remote_args[@]}")" || status=$?
   mkdir -p "$RESULTS"
   scp -q -P "$SSH_PORT" -r "$SSH_TARGET:$remote_results/." "$RESULTS/" || true
@@ -110,6 +112,8 @@ if [ -z "${MODEL:-}" ]; then
   MODEL=${MODEL:-/models/llm/model.gguf}
 fi
 BENCH_MEMORY=${BENCH_MEMORY:-3g}
+FLAGS=${FLAGS:-0 1}
+JUDGE_TIMEOUT=${DDS_JUDGE_TIMEOUT_S:-}
 MIN_FREE_MB=${MIN_FREE_MB:-2500}
 THREADS=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)
 
@@ -130,6 +134,7 @@ fi
   echo "volume: $VOLUME"
   echo "model: $MODEL"
   echo "bench memory limit: $BENCH_MEMORY"
+  echo "flags: $FLAGS, judge timeout: ${JUDGE_TIMEOUT:-как в коде}"
 } | tee "$RESULTS/env.txt"
 
 if command -v free >/dev/null && [ "$DRY_RUN" = 0 ]; then
@@ -156,6 +161,7 @@ run_bench() {
   local cmd=(docker run --rm --name "$name" --memory "$BENCH_MEMORY"
     -v "$VOLUME:/models:ro" -v "$WORK/ai:/repo/ai:ro" -v "$RESULTS:/out"
     -e PYTHONPATH=/repo/ai/src -e PYTHONDONTWRITEBYTECODE=1 -e "DDS_JUDGE_REPORT_FACTS=$facts"
+    -e "DDS_JUDGE_TIMEOUT_S=$JUDGE_TIMEOUT"
     --entrypoint python "$IMAGE" /repo/ai/bench/run_judge_bench.py
     --model "$MODEL" --threads "$THREADS" --json "/out/$out.json")
   echo "== DDS_JUDGE_REPORT_FACTS=$facts: ${cmd[*]}"
@@ -183,7 +189,8 @@ run_bench() {
 }
 
 status=0
-run_bench 0 || status=$?
-run_bench 1 || status=$?
+for facts in $FLAGS; do
+  run_bench "$facts" || status=$?
+done
 echo "результаты: $RESULTS"
 exit "$status"

@@ -4,7 +4,16 @@ import json
 
 import pytest
 
-from dds_ai.bridge.evaluate import REPORT_FACTS_ENV, _norms, evaluate_card, judge_schema
+from dds_ai.bridge import evaluate as evaluate_mod
+from dds_ai.bridge.evaluate import (
+    JUDGE_TIMEOUT_ENV,
+    JUDGE_TIMEOUT_S,
+    REPORT_FACTS_ENV,
+    _norms,
+    evaluate_card,
+    judge_schema,
+    judge_timeout_s,
+)
 from tests.fakes import FakeLLM
 
 EXPECTED = {
@@ -174,6 +183,42 @@ def test_report_facts_flag_off_values(monkeypatch, value):
     monkeypatch.setenv(REPORT_FACTS_ENV, value)
     llm = judge(10, [(2, "застрял лист в кабине", True)])
     assert report_check(evaluate_card(request(run(GOOD, report=STT_REPORT)), llm))["points"] == 7
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [(None, JUDGE_TIMEOUT_S), ("55", 55.0), ("12.5", 12.5)]
+)
+def test_judge_timeout_from_env(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv(JUDGE_TIMEOUT_ENV, raising=False)
+    else:
+        monkeypatch.setenv(JUDGE_TIMEOUT_ENV, value)
+    assert judge_timeout_s() == expected
+
+
+@pytest.mark.parametrize("value", ["", "abc", "0", "-5"])
+def test_judge_timeout_bad_values_fall_back(monkeypatch, value):
+    monkeypatch.setenv(JUDGE_TIMEOUT_ENV, value)
+    assert judge_timeout_s() == JUDGE_TIMEOUT_S
+
+
+def test_judge_timeout_default_fits_backend_read_timeout():
+    # стенд: обработка промпта до первого токена не прерывается, вызов перебирает срок до ~15 с;
+    # бэкенд ждёт ответ /evaluate 90 с (app.ai.read-timeout-ms)
+    assert JUDGE_TIMEOUT_S + 15 < 90
+
+
+def test_evaluate_card_passes_judge_timeout(monkeypatch):
+    monkeypatch.setenv(JUDGE_TIMEOUT_ENV, "33")
+    seen = []
+
+    def fake_ask_json(llm, prompt, *, schema, max_tokens, timeout_s):
+        seen.append(timeout_s)
+        return None
+
+    monkeypatch.setattr(evaluate_mod, "ask_json", fake_ask_json)
+    evaluate_card(request(run(GOOD)), judge(10))
+    assert seen == [33.0]
 
 
 @pytest.mark.usefixtures("report_facts_on")
