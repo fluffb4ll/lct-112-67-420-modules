@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { listUsers, type PageResponse, type UserTableRow } from '../../api/admin';
 import { describeError } from '../../api/errors';
+import { apiFetchOptional } from '../../api/http';
 import {
   addGroupMember,
   createStudyGroup,
@@ -18,12 +19,20 @@ import { Button, ConfirmModal, Input, Modal, Notice, Panel, Select, Table } from
 
 /*
  * Учебные группы — через бэкенд (/api/teacher/studyGroup*, ветка teacher).
- * Создание, переименование, удаление и просмотр состава работают.
- * Зачислять обучающихся пока нечем: на сервере нет метода добавления участника,
- * поэтому состав группы только показывается (см. docs/backend-api.md).
+ * Преподаватель видит и меняет только свои группы, администратор — все
+ * (сервер проверяет то же самое и отвечает 403 на чужую группу).
+ * Обучающихся для зачисления берём из GET /api/users/students.
  */
 
 type Loaded<T> = T | null | 'loading';
+
+/** Кого можно зачислить. Старый сервер без /users/students — пробуем общий список пользователей */
+async function loadStudents(): Promise<UserTableRow[] | null> {
+  const students = await apiFetchOptional<UserTableRow[]>('/users/students');
+  if (students) return students;
+  const all = await listUsers(0, 100);
+  return all ? all.content.filter((u) => /STUDENT|ОБУЧ/i.test(u.roleName) && u.isActive) : null;
+}
 
 async function load(page: number): Promise<{ groups: PageResponse<StudyGroupRow> | null; error?: string }> {
   try {
@@ -34,7 +43,7 @@ async function load(page: number): Promise<{ groups: PageResponse<StudyGroupRow>
 }
 
 export function Groups() {
-  const { user, info } = useMe();
+  const { user, role, info } = useMe();
   const [page, setPage] = useState(0);
   const [groups, setGroups] = useState<Loaded<PageResponse<StudyGroupRow>>>('loading');
   const [msg, setMsg] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null);
@@ -72,6 +81,8 @@ export function Groups() {
   };
 
   const mine = (g: StudyGroupRow) => g.teacher?.id === user?.id;
+  const isAdmin = role?.kind === 'admin';
+  const manage = (g: StudyGroupRow) => canEdit && (isAdmin || mine(g));
   const rows = groups !== null && groups !== 'loading' ? groups.content : [];
   const pages = groups !== null && groups !== 'loading' ? Math.max(groups.totalPages, 1) : 1;
   const total = groups !== null && groups !== 'loading' ? groups.totalElements : 0;
@@ -117,12 +128,12 @@ export function Groups() {
                       <Button size="sm" variant="ghost" onClick={() => setMembersFor(g)}>
                         Состав
                       </Button>
-                      {canEdit && mine(g) && (
+                      {manage(g) && (
                         <Button size="sm" variant="secondary" onClick={() => setRenameFor(g)}>
                           Переименовать
                         </Button>
                       )}
-                      {canEdit && (
+                      {manage(g) && (
                         <Button size="sm" variant="danger" onClick={() => setDeleteFor(g)}>
                           Удалить
                         </Button>
@@ -184,7 +195,7 @@ export function Groups() {
         />
       )}
 
-      {membersFor && <MembersModal group={membersFor} canEdit={canEdit} onClose={() => setMembersFor(null)} />}
+      {membersFor && <MembersModal group={membersFor} canEdit={manage(membersFor)} onClose={() => setMembersFor(null)} />}
 
       {deleteFor && (
         <ConfirmModal
@@ -262,15 +273,15 @@ function MembersModal({ group, canEdit, onClose }: { group: StudyGroupRow; canEd
       (g) => alive && setData(g),
       (e: unknown) => alive && setErr(describeError(e, 'Не удалось загрузить состав группы')),
     );
-    // кого можно зачислить: обучающиеся из общего списка пользователей
-    void listUsers(0, 100).then(
-      (p) => alive && setStudents(p ? p.content.filter((u) => /STUDENT|ОБУЧ/i.test(u.roleName) && u.isActive) : null),
-      () => alive && setStudents(null),
-    );
+    if (canEdit)
+      void loadStudents().then(
+        (list) => alive && setStudents(list),
+        () => alive && setStudents(null),
+      );
     return () => {
       alive = false;
     };
-  }, [group.id]);
+  }, [group.id, canEdit]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -305,7 +316,7 @@ function MembersModal({ group, canEdit, onClose }: { group: StudyGroupRow; canEd
         {canEdit && data && (
           <div className="flex items-end gap-2">
             {students === null ? (
-              <Notice tone="warn">Список обучающихся недоступен: нужен доступ к списку пользователей (ADMIN_CAN_READ_USERINFO).</Notice>
+              <Notice tone="warn">Список обучающихся недоступен: сервер не отдал его (GET /api/users/students). Обновите страницу или обратитесь к администратору.</Notice>
             ) : (
               <>
                 <Select label="Зачислить обучающегося" className="flex-1" value={pick} onChange={(e) => setPick(e.target.value)}>
