@@ -205,10 +205,14 @@ class SessionServiceTest {
         when(role.getName()).thenReturn("ROLE_TEACHER");
         UserEntity teacher = mock(UserEntity.class);
         when(teacher.getRole()).thenReturn(role);
+        when(teacher.getId()).thenReturn(UUID.randomUUID());
         when(authService.verifyAuthToken(token, null)).thenReturn(teacher);
 
         UUID groupId = UUID.randomUUID();
-        when(studyGroupRepository.findById(groupId)).thenReturn(Optional.of(mock(StudyGroupEntity.class)));
+        // своя группа: до проверки сценариев доходит только её преподаватель
+        StudyGroupEntity group = mock(StudyGroupEntity.class);
+        when(group.getTeacher()).thenReturn(teacher);
+        when(studyGroupRepository.findById(groupId)).thenReturn(Optional.of(group));
         // в группе есть обучающиеся: без проверки статуса занятие дошло бы до сохранения
         lenient().when(studyGroupMemberRepository.findUsersByGroupId(any())).thenReturn(List.of(mock(UserEntity.class)));
         when(scenarioRepository.findAllById(anyList())).thenReturn(List.of(
@@ -234,6 +238,96 @@ class SessionServiceTest {
         assertTrue(e.getMessage().contains("approved"));
 
         verify(sessionRepository, never()).save(any());
+    }
+
+    // ───────────── чужая группа: занятие назначает и завершает только её преподаватель ─────────────
+
+    private StudyGroupEntity groupOf(UserEntity teacher) {
+        StudyGroupEntity group = mock(StudyGroupEntity.class);
+        lenient().when(group.getId()).thenReturn(groupId);
+        lenient().when(group.getTeacher()).thenReturn(teacher);
+        return group;
+    }
+
+    private void startIn(StudyGroupEntity group) throws AuthenticationException {
+        when(studyGroupRepository.findById(groupId)).thenReturn(Optional.of(group));
+        sessionService.startSession(token, new StartSessionRequestDto(groupId, List.of(approvedId), 1, 15, 45));
+    }
+
+    @Test
+    void teacherCannotStartSessionForForeignGroup() throws AuthenticationException {
+        UserEntity other = user(UUID.randomUUID(), "ROLE_TEACHER");
+        StudyGroupEntity foreign = groupOf(other);
+        loggedInAs(user(UUID.randomUUID(), "ROLE_TEACHER"));
+
+        assertThrows(ForbiddenException.class, () -> startIn(foreign));
+
+        verify(sessionRepository, never()).save(any());
+        verifyNoInteractions(scenarioRepository);
+    }
+
+    @Test
+    void teacherCannotStartSessionForGroupWithoutTeacher() throws AuthenticationException {
+        StudyGroupEntity ownerless = groupOf(null);
+        loggedInAs(user(UUID.randomUUID(), "ROLE_TEACHER"));
+
+        assertThrows(ForbiddenException.class, () -> startIn(ownerless));
+
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void adminStartsSessionForAnyGroup() throws AuthenticationException {
+        StudyGroupEntity foreign = groupOf(user(UUID.randomUUID(), "ROLE_TEACHER"));
+        loggedInAs(user(UUID.randomUUID(), "ROLE_ADMIN"));
+        when(scenarioRepository.findAllById(anyList())).thenReturn(List.of(scenario(approvedId, ScenarioStatus.APPROVED)));
+        when(studyGroupMemberRepository.findUsersByGroupId(groupId)).thenReturn(List.of(mock(UserEntity.class)));
+        when(sessionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        startIn(foreign);
+
+        verify(sessionRepository).save(any());
+    }
+
+    private SessionEntity activeSession(UserEntity startedBy, StudyGroupEntity group) {
+        SessionEntity session = SessionEntity.builder().id(sessionId).teacher(startedBy).studyGroup(group)
+                .startedAt(OffsetDateTime.now().minusMinutes(5)).build();
+        when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(session));
+        return session;
+    }
+
+    @Test
+    void teacherCannotEndForeignSession() throws AuthenticationException {
+        UserEntity other = user(UUID.randomUUID(), "ROLE_TEACHER");
+        SessionEntity session = activeSession(other, groupOf(other));
+        loggedInAs(user(UUID.randomUUID(), "ROLE_TEACHER"));
+
+        assertThrows(ForbiddenException.class, () -> sessionService.endSession(token, sessionId));
+
+        assertEquals(null, session.getEndedAt());
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void teacherEndsSessionOfOwnGroupStartedByAdmin() throws AuthenticationException {
+        UserEntity teacher = user(UUID.randomUUID(), "ROLE_TEACHER");
+        SessionEntity session = activeSession(user(UUID.randomUUID(), "ROLE_ADMIN"), groupOf(teacher));
+        loggedInAs(teacher);
+
+        sessionService.endSession(token, sessionId);
+
+        assertTrue(session.getEndedAt() != null);
+    }
+
+    @Test
+    void adminEndsAnySession() throws AuthenticationException {
+        UserEntity other = user(UUID.randomUUID(), "ROLE_TEACHER");
+        SessionEntity session = activeSession(other, groupOf(other));
+        loggedInAs(user(UUID.randomUUID(), "ROLE_ADMIN"));
+
+        sessionService.endSession(token, sessionId);
+
+        assertTrue(session.getEndedAt() != null);
     }
 
     // ───────────── просмотр занятий: кто что видит ─────────────

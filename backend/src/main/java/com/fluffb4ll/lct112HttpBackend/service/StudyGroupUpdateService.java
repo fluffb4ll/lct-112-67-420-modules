@@ -13,10 +13,12 @@ import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.EntityType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.EventType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.Permissions;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.StudyGroupException;
 import com.fluffb4ll.lct112HttpBackend.repository.StudyGroupMemberRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.StudyGroupRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.UserRepository;
+import com.fluffb4ll.lct112HttpBackend.util.AccessUtil;
 import com.fluffb4ll.lct112HttpBackend.util.HttpRequestUtil;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
@@ -51,8 +53,13 @@ public class StudyGroupUpdateService {
         if (studyGroupRepository.existsByName(trimmedName))
             throw new StudyGroupException("Group name is already taken");
 
-        UserEntity teacher = null;
-        if (request.teacherId() != null)
+        // преподаватель создаёт группу только себе; назначить другого преподавателя может администратор
+        boolean isAdmin = AccessUtil.isAdmin(currentUser);
+        if (!isAdmin && request.teacherId() != null && !request.teacherId().equals(currentUser.getId()))
+            throw new ForbiddenException("Only an admin can create a study group for another teacher");
+
+        UserEntity teacher = isAdmin ? null : currentUser;
+        if (isAdmin && request.teacherId() != null)
             teacher = userRepository.findById(request.teacherId())
                     .orElseThrow(() -> new StudyGroupException("Teacher not found"));
 
@@ -79,6 +86,7 @@ public class StudyGroupUpdateService {
 
         StudyGroupEntity targetGroup = studyGroupRepository.findById(request.groupId())
                 .orElseThrow(() -> new StudyGroupException("Study group not found"));
+        requireCanManage(currentUser, targetGroup);
 
         StudyGroupEntity oldGroupState = new StudyGroupEntity(targetGroup);
         boolean wasUpdated = false;
@@ -95,6 +103,8 @@ public class StudyGroupUpdateService {
             UUID currentTeacherId = targetGroup.getTeacher() != null
                     ? targetGroup.getTeacher().getId() : null;
             if (!request.teacherId().equals(currentTeacherId)) {
+                if (!AccessUtil.isAdmin(currentUser))
+                    throw new ForbiddenException("Only an admin can reassign a study group to another teacher");
                 UserEntity newTeacher = userRepository.findById(request.teacherId())
                         .orElseThrow(() -> new StudyGroupException("Teacher not found"));
                 targetGroup.setTeacher(newTeacher);
@@ -122,6 +132,7 @@ public class StudyGroupUpdateService {
 
         StudyGroupEntity targetGroup = studyGroupRepository.findById(groupId)
                 .orElseThrow(() -> new StudyGroupException("Study group not found"));
+        requireCanManage(currentUser, targetGroup);
 
         studyGroupRepository.delete(targetGroup);
 
@@ -142,9 +153,15 @@ public class StudyGroupUpdateService {
 
         StudyGroupEntity group = studyGroupRepository.findById(groupId)
                 .orElseThrow(() -> new StudyGroupException("Study group not found"));
+        requireCanManage(currentUser, group);
 
         UserEntity student = userRepository.findById(studentId)
                 .orElseThrow(() -> new StudyGroupException("User not found"));
+
+        // преподаватель зачисляет только обучающихся; администратор — кого угодно
+        if (!AccessUtil.isAdmin(currentUser) && !AccessUtil.isStudent(student)) {
+            throw new StudyGroupException("Only students can be enrolled in a study group");
+        }
 
         if (!student.isActive()) {
             throw new StudyGroupException("User is deactivated");
@@ -173,9 +190,9 @@ public class StudyGroupUpdateService {
     public void removeMemberFromStudyGroup(UUID token, UUID groupId, UUID studentId) throws AuthenticationException {
         UserEntity currentUser = authService.verifyAuthToken(token, Permissions.ADMIN_CAN_EDIT_GROUPS);
 
-        if (!studyGroupRepository.existsById(groupId)) {
-            throw new StudyGroupException("Study group not found");
-        }
+        StudyGroupEntity group = studyGroupRepository.findById(groupId)
+                .orElseThrow(() -> new StudyGroupException("Study group not found"));
+        requireCanManage(currentUser, group);
 
         StudyGroupMemberId memberId = new StudyGroupMemberId(groupId, studentId);
         if (!studyGroupMemberRepository.existsById(memberId)) {
@@ -197,10 +214,15 @@ public class StudyGroupUpdateService {
 
     @Transactional
     public StudyGroupInfoDto getStudyGroup(UUID token, UUID groupId) throws AuthenticationException {
-        authService.verifyAuthToken(token, null);
+        UserEntity currentUser = authService.verifyAuthToken(token, null);
 
         StudyGroupEntity group = studyGroupRepository.findById(groupId)
                 .orElseThrow(() -> new StudyGroupException("Study group not found"));
+        // состав видят администратор, преподаватель группы и её участники
+        if (!AccessUtil.canManageGroup(currentUser, group)
+                && !studyGroupMemberRepository.existsByIdGroupIdAndIdStudentId(groupId, currentUser.getId())) {
+            throw new ForbiddenException("You do not have permission to view this study group");
+        }
 
         List<UserEntity> members = studyGroupMemberRepository.findUsersByGroupId(groupId);
 
@@ -217,7 +239,7 @@ public class StudyGroupUpdateService {
 
     @Transactional
     public PageResponseDto<StudyGroupTableRowDto> getStudyGroups(UUID token, int page, int size) throws AuthenticationException {
-        authService.verifyAuthToken(token, null);
+        UserEntity currentUser = authService.verifyAuthToken(token, null);
 
         int validatedSize = Math.clamp(size, 1, 100);
         int validatedPage = Math.max(page, 0);
@@ -228,8 +250,16 @@ public class StudyGroupUpdateService {
                 Sort.by(Sort.Direction.ASC, "name")
         );
 
-        Page<StudyGroupTableRowDto> resultPage = studyGroupRepository.findAllForTable(pageable);
+        // администратору — все группы, остальным — те, что ведут или в которых состоят
+        Page<StudyGroupTableRowDto> resultPage = AccessUtil.isAdmin(currentUser)
+                ? studyGroupRepository.findAllForTable(pageable)
+                : studyGroupRepository.findVisibleForTable(currentUser.getId(), pageable);
 
         return PageResponseDto.from(resultPage);
+    }
+
+    private static void requireCanManage(UserEntity user, StudyGroupEntity group) {
+        if (!AccessUtil.canManageGroup(user, group))
+            throw new ForbiddenException("You can manage only your own study groups");
     }
 }
