@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { studentProfile, type StudentProfile } from '../../api/analytics';
 import { dateTime } from '../../domain/format';
+import { serverSkillBars } from '../../domain/skills';
 import { CardBadge } from '../shared/CardBadge';
 import { useCardEvaluations } from '../../training/cardEvaluations';
 import { Notice, Panel, Stat, Table } from '../../ui';
@@ -28,7 +29,7 @@ export function ServerProfile({ studentId }: { studentId: string }) {
   }, [studentId]);
 
   if (off || !data) return null;
-  const skills = data.radarSkills ? Object.entries(data.radarSkills) : [];
+  const skills = serverSkillBars(data.radarSkills);
 
   return (
     <Panel title="Результаты занятий (данные сервера)">
@@ -42,7 +43,7 @@ export function ServerProfile({ studentId }: { studentId: string }) {
         {!!skills.length && (
           <div>
             <div className="mb-1.5 text-[13px] font-medium">Навыки</div>
-            <HBars items={skills.map(([label, value]) => ({ label, value: Math.round(value) }))} />
+            <HBars items={skills} />
           </div>
         )}
 

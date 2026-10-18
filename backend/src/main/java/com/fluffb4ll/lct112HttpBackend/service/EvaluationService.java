@@ -294,6 +294,7 @@ public class EvaluationService {
                     evaluation.setAiScore(aiResponse.aiScore());
                     evaluation.setAiGrammarScore(aiResponse.aiGrammarScore());
                     evaluation.setAiComplianceErrors(aiResponse.aiComplianceErrors());
+                    evaluation.setAiChecks(aiResponse.checks());
                     evaluation.setAiRecommendations(aiResponse.aiRecommendations());
                     evaluation.setAiStatus(AiEvaluationStatus.OK);
 

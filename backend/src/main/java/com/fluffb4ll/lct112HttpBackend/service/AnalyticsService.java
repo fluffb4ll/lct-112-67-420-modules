@@ -51,7 +51,7 @@ public class AnalyticsService {
         double sumDuration = 0;
         int evaluatedCount = 0;
 
-        Map<String, Double> skillSums = initSkillsMap();
+        SkillTotals skillTotals = new SkillTotals();
 
         Map<UUID, List<OperatorCardEntity>> cardsByStudent = groupCards.stream()
                 .filter(c -> c.getStudent() != null)
@@ -79,7 +79,7 @@ public class AnalyticsService {
                         passedCards++;
                     }
 
-                    accumulateSkills(skillSums, eval.getAiComplianceErrors());
+                    skillTotals.add(eval.getAiChecks());
                 }
             }
 
@@ -97,10 +97,6 @@ public class AnalyticsService {
         double passedPct = evaluatedCount > 0 ? ((double) passedCards / evaluatedCount * 100.0) : 0.0;
         double avgDuration = totalCards > 0 ? (sumDuration / totalCards) : 0.0;
 
-        Map<String, Double> skillAverages = new HashMap<>();
-        int finalEvaluatedCount = evaluatedCount;
-        skillSums.forEach((k, v) -> skillAverages.put(k, finalEvaluatedCount > 0 ? Math.round((v / finalEvaluatedCount) * 10.0) / 10.0 : 0.0));
-
         return new GroupAnalyticsDto(
                 group.getId(),
                 group.getName(),
@@ -110,7 +106,7 @@ public class AnalyticsService {
                 Math.round(avgScore * 10.0) / 10.0,
                 Math.round(passedPct * 10.0) / 10.0,
                 Math.round(avgDuration * 10.0) / 10.0,
-                skillAverages,
+                skillTotals.percentages(),
                 studentStats
         );
     }
@@ -126,7 +122,7 @@ public class AnalyticsService {
 
         double sumScore = 0;
         int evaluatedCount = 0;
-        Map<String, Double> skills = initSkillsMap();
+        SkillTotals skills = new SkillTotals();
 
         List<String> recommendations = new ArrayList<>();
 
@@ -142,15 +138,11 @@ public class AnalyticsService {
                     recommendations.add(eval.getAiRecommendations());
                 }
 
-                accumulateSkills(skills, eval.getAiComplianceErrors());
+                skills.add(eval.getAiChecks());
             }
         }
 
         double avgScore = evaluatedCount > 0 ? (sumScore / evaluatedCount) : 0.0;
-        int finalCount = evaluatedCount;
-        Map<String, Double> radar = new HashMap<>();
-        skills.forEach((k, v) -> radar.put(k, finalCount > 0 ? Math.round((v / finalCount) * 10.0) / 10.0 : 0.0));
-
         List<OperatorCardSummaryDto> recent = cards.stream()
                 .sorted(Comparator.comparing(OperatorCardEntity::getSubmittedAt, Comparator.nullsLast(Comparator.reverseOrder())))
                 .limit(10)
@@ -164,7 +156,7 @@ public class AnalyticsService {
                 cards.size(),
                 Math.round(avgScore * 10.0) / 10.0,
                 avgScore >= 75.0,
-                radar,
+                skills.percentages(),
                 recent,
                 recommendations.stream().distinct().limit(5).toList()
         );
@@ -263,25 +255,43 @@ public class AnalyticsService {
         return csv.toString();
     }
 
-    private Map<String, Double> initSkillsMap() {
-        Map<String, Double> map = new HashMap<>();
-        map.put("cardData", 0.0);
-        map.put("routing", 0.0);
-        map.put("voice", 0.0);
-        map.put("timing", 0.0);
-        map.put("grammar", 0.0);
-        return map;
-    }
+    /**
+     * Навыки по проверкам регламента от ИИ (checks: skill, points, max): доля набранных баллов, 0–100.
+     * Делим на сумму max только тех проверок, где навык был: зона, профиль и дубль взаимоисключающие
+     * в одной карточке, и деление на все оценки занижало бы их. Навык без проверок в карту не попадает —
+     * «нет данных» не равно 0. Оценки без checks (строки старше колонки, только преподаватель) не учитываются.
+     */
+    static final class SkillTotals {
+        private final Map<String, double[]> totals = new LinkedHashMap<>();
 
-    private void accumulateSkills(Map<String, Double> targetMap, Map<String, Object> complianceErrors) {
-        if (complianceErrors == null) {
-            return;
+        void add(List<Map<String, Object>> checks) {
+            if (checks == null) {
+                return;
+            }
+            for (Map<String, Object> check : checks) {
+                if (check == null || !(check.get("skill") instanceof String skill) || skill.isBlank()) {
+                    continue;
+                }
+                double max = toDouble(check.get("max"));
+                if (max <= 0) {
+                    continue;
+                }
+                double points = Math.max(0, Math.min(max, toDouble(check.get("points"))));
+                double[] t = totals.computeIfAbsent(skill, k -> new double[2]);
+                t[0] += points;
+                t[1] += max;
+            }
         }
-        targetMap.compute("cardData", (k, v) -> v + getDouble(complianceErrors.get("cardDataScore")));
-        targetMap.compute("routing", (k, v) -> v + getDouble(complianceErrors.get("routingScore")));
-        targetMap.compute("voice", (k, v) -> v + getDouble(complianceErrors.get("voiceScore")));
-        targetMap.compute("timing", (k, v) -> v + getDouble(complianceErrors.get("timingScore")));
-        targetMap.compute("grammar", (k, v) -> v + getDouble(complianceErrors.get("grammarScore")));
+
+        Map<String, Double> percentages() {
+            Map<String, Double> result = new LinkedHashMap<>();
+            totals.forEach((skill, t) -> result.put(skill, Math.round(t[0] / t[1] * 1000.0) / 10.0));
+            return result;
+        }
+
+        private static double toDouble(Object obj) {
+            return obj instanceof Number n ? n.doubleValue() : 0.0;
+        }
     }
 
     /**
@@ -293,13 +303,6 @@ public class AnalyticsService {
         if (eval.getFinalScore() != null) return eval.getFinalScore();
         if (eval.getTeacherScore() != null) return eval.getTeacherScore();
         return eval.getAiScore();
-    }
-
-    private double getDouble(Object obj) {
-        if (obj instanceof Number n) {
-            return n.doubleValue();
-        }
-        return 0.0;
     }
 
     private String sanitizeForCsv(String value) {

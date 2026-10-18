@@ -397,7 +397,8 @@ def evaluate_card(request: dict[str, Any], llm: LLMProvider | None) -> dict[str,
     passed = score >= norms.pass_score and primary_ok
     failed = [c for c in rr.checks if not c.ok]
     worst = max(rr.checks, key=lambda c: c.max - c.points)
-    weak = worst.skill if worst.points < worst.max else (rr.skills[0] if rr.skills else "timing")
+    # при полном балле слабого навыка нет — не советуем «подтянуть» первый навык сценария
+    weak = worst.skill if worst.points < worst.max else None
 
     text: list[str] = [
         f"Итог: {score} из 100 — {'зачёт' if passed else 'незачёт'}.",
@@ -422,10 +423,13 @@ def evaluate_card(request: dict[str, Any], llm: LLMProvider | None) -> dict[str,
     if failed:
         text.append("Замечания по регламенту:")
         text.extend(f"— {c.title} ({c.points}/{c.max}): {c.detail}" for c in failed)
-    text.append(
-        f"Рекомендация: подтяните навык «{SKILL_LABELS.get(weak, weak)}». "
-        f"{SKILL_ADVICE.get(weak, '')}"
-    )
+    if weak is not None:
+        text.append(
+            f"Рекомендация: подтяните навык «{SKILL_LABELS.get(weak, weak)}». "
+            f"{SKILL_ADVICE.get(weak, '')}"
+        )
+    else:
+        text.append("Рекомендация: замечаний нет — переходите к сценариям сложнее.")
     if steered:
         text.append(
             "В вашем тексте есть обращение к проверке — баллы ИИ не повышал, "
@@ -447,7 +451,7 @@ def evaluate_card(request: dict[str, Any], llm: LLMProvider | None) -> dict[str,
         },
         "aiComplianceErrors": {c.title: f"{c.detail} ({c.points}/{c.max})" for c in failed},
         "aiRecommendations": "\n".join(text),
-        # для отладки и будущих клиентов; бэкенд эти поля не читает
+        # по checks (skill, points, max) бэкенд считает навыки; остальное — для отладки
         "passed": passed,
         "checks": [c.to_dict() for c in rr.checks],
         "evaluatedBy": "rules+llm" if verdict is not None else "rules",

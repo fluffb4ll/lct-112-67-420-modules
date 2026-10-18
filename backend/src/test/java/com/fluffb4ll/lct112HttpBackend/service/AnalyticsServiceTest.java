@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -70,7 +71,14 @@ class AnalyticsServiceTest {
         when(evaluationRepository.findByCardId(unavailable.getId()))
                 .thenReturn(Optional.of(new EvaluationEntity(unavailable)));
         when(operatorCardRepository.findByStudentId(studentId)).thenReturn(List.of(scored, unavailable));
+        this.student = student;
+        this.scored = scored;
+        this.unavailable = unavailable;
     }
+
+    private UserEntity student;
+    private OperatorCardEntity scored;
+    private OperatorCardEntity unavailable;
 
     @Test
     void groupAnalyticsSkipsEvaluationWithoutScore() throws Exception {
@@ -99,6 +107,58 @@ class AnalyticsServiceTest {
 
         assertEquals(92.0, entry.averageScore());
         assertEquals(2, entry.cardsCompleted());
+    }
+
+    @Test
+    void studentProfileWithoutAiChecksHasNoSkills() throws Exception {
+        // Старые оценки без checks не дают навыкам нулей — навыков просто нет
+        assertTrue(service.getStudentProfile(token, studentId).radarSkills().isEmpty());
+    }
+
+    @Test
+    void studentProfileRadarComesFromAiChecks() throws Exception {
+        givenTwoCardsWithChecks();
+
+        Map<String, Double> radar = service.getStudentProfile(token, studentId).radarSkills();
+
+        assertEquals(Map.of("timing", 87.5, "zone", 75.0, "profile", 100.0, "literacy", 75.0), radar);
+    }
+
+    @Test
+    void groupSkillsAverageComesFromAiChecks() throws Exception {
+        givenTwoCardsWithChecks();
+
+        Map<String, Double> skills = service.getGroupAnalytics(token, groupId).skillsAverage();
+
+        // зона была только в одной карточке из трёх оценённых — 75, а не 25
+        assertEquals(Map.of("timing", 87.5, "zone", 75.0, "profile", 100.0, "literacy", 75.0), skills);
+    }
+
+    /** Две карточки с проверками ИИ плюс оценка из setUp без checks (92) — она в навыки не входит */
+    private void givenTwoCardsWithChecks() {
+        OperatorCardEntity first = card(student);
+        EvaluationEntity firstEval = new EvaluationEntity(first);
+        firstEval.setAiScore(80);
+        firstEval.setAiChecks(List.of(
+                check("open_time", "timing", 10, 10),
+                check("total_time", "timing", 5, 10),
+                check("primary_status", "zone", 15, 20),
+                check("literacy", "literacy", 10, 10)));
+        OperatorCardEntity second = card(student);
+        EvaluationEntity secondEval = new EvaluationEntity(second);
+        secondEval.setAiScore(95);
+        secondEval.setAiChecks(List.of(
+                check("open_time", "timing", 10, 10),
+                check("total_time", "timing", 10, 10),
+                check("primary_status", "profile", 20, 20),
+                check("literacy", "literacy", 5, 10)));
+        when(evaluationRepository.findByCardId(first.getId())).thenReturn(Optional.of(firstEval));
+        when(evaluationRepository.findByCardId(second.getId())).thenReturn(Optional.of(secondEval));
+        when(operatorCardRepository.findByStudentId(studentId)).thenReturn(List.of(scored, unavailable, first, second));
+    }
+
+    private static Map<String, Object> check(String id, String skill, int points, int max) {
+        return Map.of("id", id, "title", id, "skill", skill, "points", points, "max", max, "ok", points == max);
     }
 
     private static OperatorCardEntity card(UserEntity student) {

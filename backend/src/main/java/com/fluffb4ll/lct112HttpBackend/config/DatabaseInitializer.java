@@ -202,6 +202,7 @@ public class DatabaseInitializer implements CommandLineRunner {
                     ai_compliance_errors JSONB,
                     ai_recommendations TEXT,
                     ai_status VARCHAR(20),
+                    ai_checks JSONB,
                     teacher_score INTEGER CHECK (teacher_score >= 0 AND teacher_score <= 100),
                     teacher_comment TEXT,
                     evaluated_by UUID REFERENCES iam.users(id),
@@ -213,6 +214,7 @@ public class DatabaseInitializer implements CommandLineRunner {
 
             // Колонка добавлена позже CREATE TABLE: досоздаём в уже развёрнутых базах
             jdbcTemplate.execute("ALTER TABLE training.evalutions ADD COLUMN IF NOT EXISTS ai_status VARCHAR(20);");
+            jdbcTemplate.execute("ALTER TABLE training.evalutions ADD COLUMN IF NOT EXISTS ai_checks JSONB;");
 
             // 16. Seed initial roles if empty
             Integer roleCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM iam.roles", Integer.class);

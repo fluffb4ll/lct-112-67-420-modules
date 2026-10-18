@@ -483,7 +483,7 @@ class EvaluationServiceTest {
     }
 
     private static AiEvaluationResponseDto aiResponse(Integer score) {
-        return new AiEvaluationResponseDto(score, Map.of(), Map.of(), "рекомендации", score);
+        return new AiEvaluationResponseDto(score, Map.of(), Map.of(), "рекомендации", score, null);
     }
 
     private static UserEntity user(String roleName) {

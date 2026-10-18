@@ -72,6 +72,18 @@ def test_good_answer_scores_full_without_llm():
     assert out["aiComplianceErrors"] == {}
     assert out["evaluatedBy"] == "rules"
     assert "правилам регламента" in out["aiRecommendations"]
+    # при 100/100 нечего «подтягивать»
+    assert "подтяните" not in out["aiRecommendations"]
+    assert "замечаний нет" in out["aiRecommendations"]
+    # по checks бэкенд строит навыки: у каждой проверки навык и баллы
+    assert out["checks"] and all({"skill", "points", "max"} <= set(c) for c in out["checks"])
+
+
+def test_lost_points_recommend_weakest_skill():
+    events = run(GOOD)
+    events[2]["status"] = "Принята"
+    out = evaluate_card(request(events), None)
+    assert "Рекомендация: подтяните навык «Зона ответственности»" in out["aiRecommendations"]
 
 
 def test_wrong_status_is_failed_and_explained():
