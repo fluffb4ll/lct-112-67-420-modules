@@ -131,9 +131,13 @@ export function StudentHome() {
             </Panel>
 
             <Panel title="Самостоятельная тренировка">
-              <p className="text-sm text-c-muted">
-                ИИ подобрал карточки по вашему самому слабому навыку — <b className="text-c-text">«{SKILL_LABELS[weak]}»</b>, сложность {diff}. {SKILL_ADVICE[weak]}
-              </p>
+              {recommended.length === 0 ? (
+                <Empty>Карточек для тренировки пока нет: они появятся, когда преподаватель назначит занятия вашей группе.</Empty>
+              ) : (
+                <p className="text-sm text-c-muted">
+                  ИИ подобрал карточки по вашему самому слабому навыку — <b className="text-c-text">«{SKILL_LABELS[weak]}»</b>, сложность {diff}. {SKILL_ADVICE[weak]}
+                </p>
+              )}
               <ul className="mt-3 flex flex-col gap-2 text-sm">
                 {recommended.map((s: Scenario) => (
                   <li key={s.id} className="flex items-center justify-between gap-2 bg-c-bg px-3 py-2">
