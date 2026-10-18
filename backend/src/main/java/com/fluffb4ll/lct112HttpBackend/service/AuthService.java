@@ -6,6 +6,7 @@ import com.fluffb4ll.lct112HttpBackend.dto.response.UserInfoDto;
 import com.fluffb4ll.lct112HttpBackend.entity.*;
 import com.fluffb4ll.lct112HttpBackend.model.enums.Permissions;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.AuthTokenExpiredException;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.repository.*;
 import com.fluffb4ll.lct112HttpBackend.util.IdGeneratorUtil;
 import jakarta.transaction.Transactional;
@@ -77,7 +78,8 @@ public class AuthService {
             throw new AuthenticationException("Your account is deactivated. Contact your admin");
         if (permission != null &&
                 !tokenEntity.getUser().getRole().getPermissionsAsSet().contains(permission.name()))
-            throw new AuthenticationException("You do not have required permissions");
+            // 403, не 401: пользователь опознан, а на 401 фронт считает сессию истёкшей и разлогинивает
+            throw new ForbiddenException("You do not have required permissions");
 
         return tokenEntity.getUser();
     }
