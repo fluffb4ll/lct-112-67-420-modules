@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 
 import javax.naming.AuthenticationException;
 import java.net.URI;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -47,6 +48,14 @@ public class UserController {
     ) throws AuthenticationException {
         userUpdateService.updateUser(UUID.fromString(token), request);
         return ResponseEntity.ok().body(null);
+    }
+
+    /** Активные обучающиеся для зачисления в группу (преподавателю — без доступа ко всем пользователям) */
+    @GetMapping("/students")
+    public ResponseEntity<List<UserTableRowDto>> getStudents(
+            @CookieValue(name = "AUTH_TOKEN") String token
+    ) throws AuthenticationException {
+        return ResponseEntity.ok().body(userUpdateService.getStudents(UUID.fromString(token)));
     }
 
     @GetMapping("/{uuid}")
