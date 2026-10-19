@@ -1,5 +1,6 @@
 package com.fluffb4ll.lct112HttpBackend.service;
 
+import com.fluffb4ll.lct112HttpBackend.config.AiEvaluationExecutorConfig;
 import com.fluffb4ll.lct112HttpBackend.dto.request.SubmitOperatorCardRequestDto;
 import com.fluffb4ll.lct112HttpBackend.dto.response.OperatorCardDetailsDto;
 import com.fluffb4ll.lct112HttpBackend.dto.response.OperatorCardSummaryDto;
@@ -22,12 +23,17 @@ import com.fluffb4ll.lct112HttpBackend.util.HttpRequestUtil;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.naming.AuthenticationException;
 import java.time.Duration;
@@ -35,7 +41,9 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Executor;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class OperatorCardService {
@@ -48,6 +56,8 @@ public class OperatorCardService {
     private final AuthService authService;
     private final AuditService auditService;
     private final EvaluationService evaluationService;
+    @Qualifier(AiEvaluationExecutorConfig.AI_EVALUATION_EXECUTOR)
+    private final Executor aiEvaluationExecutor;
 
     @Transactional
     public UUID submitCard(UUID token, SubmitOperatorCardRequestDto request) throws AuthenticationException {
@@ -115,8 +125,20 @@ public class OperatorCardService {
 
         OperatorCardEntity savedCard = operatorCardRepository.save(card);
 
-        // Immediate automatic AI scoring
-        evaluationService.triggerAiEvaluation(savedCard);
+        // Автоматическая оценка ИИ: после коммита и в фоне — языковая модель отвечает десятки секунд,
+        // сдача карточки не должна ждать её (и упираться в таймауты прокси).
+        UUID savedCardId = savedCard.getId();
+        Runnable evaluate = () -> dispatchAiEvaluation(savedCardId);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    evaluate.run();
+                }
+            });
+        } else {
+            evaluate.run();
+        }
 
         auditService.logAction(
                 currentUser.getId(),
@@ -129,6 +151,26 @@ public class OperatorCardService {
         );
 
         return savedCard.getId();
+    }
+
+    /** Отдать оценку в ограниченный пул; переполнение пула не должно ронять уже зафиксированную сдачу. */
+    private void dispatchAiEvaluation(UUID cardId) {
+        try {
+            aiEvaluationExecutor.execute(() -> {
+                try {
+                    evaluationService.triggerAiEvaluationById(cardId);
+                } catch (RuntimeException e) {
+                    log.warn("AI evaluation failed for card {}", cardId, e);
+                }
+            });
+        } catch (TaskRejectedException e) {
+            log.warn("AI evaluation queue is full, card {} will not be evaluated automatically", cardId);
+            try {
+                evaluationService.markAiUnavailable(cardId);
+            } catch (RuntimeException markError) {
+                log.warn("Failed to mark AI evaluation of card {} as unavailable", cardId, markError);
+            }
+        }
     }
 
     @Transactional

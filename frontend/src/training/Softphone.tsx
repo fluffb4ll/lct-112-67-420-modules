@@ -6,12 +6,13 @@ import { useRun } from '../store/training';
 import { cx } from '../ui/cx';
 import { phoneLabel, useSoftphone } from './softphoneStore';
 import { busy, ringback } from './sounds';
-import { listen, recordMic, speak, sttAvailable, stopSpeaking, type Listener, type Recording } from './voice';
+import { listen, recognize, recordMic, serverSttAvailable, speak, sttAvailable, stopSpeaking, type Listener, type Recording } from './voice';
 
 /*
  * Учебный софтфон — эмулятор VoIP в браузере (решение, одобренное заказчиком вместо SIP-сервера).
  * Диспетчер ДДС звонит руководителю смены (или в стороннюю организацию), делает короткий доклад голосом,
  * собеседник отвечает синтезированным голосом. Доклад распознаётся и попадает в оценку.
+ * Речь распознаёт и синтезирует ИИ-контур (faster-whisper и Piper, офлайн); без него — браузер или ввод текстом.
  * Кнопки быстрого набора — как клавиши DSS на телефоне РТУ Т16Р в учебном классе.
  */
 
@@ -23,13 +24,28 @@ export function Softphone() {
   const [heard, setHeard] = useState('');
   const [typed, setTyped] = useState('');
   const [textMode, setTextMode] = useState(!sttAvailable());
+  const [recognizing, setRecognizing] = useState(false);
+  const [sttNote, setSttNote] = useState('');
+  // запись распознаёт сервер: потоковый Web Speech не нужен, текст появится после доклада
+  const serverStt = useRef(false);
+  const [serverSttOn, setServerSttOn] = useState(false);
   const listener = useRef<Listener | null>(null);
   const recording = useRef<Recording | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const alive = useRef(true);
+  // номер звонка: после await проверяем, что звонок тот же (не сброшен и не набран новый)
+  const callSeq = useRef(0);
+  const finishing = useRef(false);
 
   useEffect(() => {
     alive.current = true;
+    void serverSttAvailable().then((ok) => {
+      serverStt.current = ok;
+      if (ok && alive.current) {
+        setServerSttOn(true);
+        setTextMode(false);
+      }
+    });
     return () => {
       alive.current = false;
       timers.current.forEach(clearTimeout);
@@ -43,9 +59,12 @@ export function Softphone() {
 
   async function call(number: string) {
     const peer = resolvePeer(number, contacts);
+    const seq = ++callSeq.current;
+    const live = () => alive.current && callSeq.current === seq;
     sp.patch({ phase: 'ringing', number, peer, lines: [], connectedAt: null });
     setHeard('');
     setTyped('');
+    setSttNote('');
     if (!peer) {
       ringback(1);
       timers.current.push(
@@ -61,12 +80,18 @@ export function Softphone() {
     ringback(2);
     timers.current.push(
       setTimeout(async () => {
-        if (!alive.current || useSoftphone.getState().phase !== 'ringing') return;
+        if (!live() || useSoftphone.getState().phase !== 'ringing') return;
         sp.patch({ phase: 'connected', connectedAt: Date.now(), lines: [{ who: 'peer', text: peer.greeting }] });
         await speak(peer.greeting, peer.voice);
-        if (!alive.current || useSoftphone.getState().phase !== 'connected') return;
-        recording.current = await recordMic();
-        if (!textMode) {
+        if (!live() || useSoftphone.getState().phase !== 'connected') return;
+        const rec = await recordMic();
+        if (!live() || useSoftphone.getState().phase !== 'connected') {
+          void rec?.stop(); // сброшен, пока спрашивали доступ к микрофону
+          return;
+        }
+        recording.current = rec;
+        if (!recording.current && serverStt.current) setTextMode(true); // нет доступа к микрофону
+        else if (!textMode && !serverStt.current) {
           listener.current = listen(
             (t) => setHeard(t),
             () => setTextMode(true),
@@ -78,19 +103,45 @@ export function Softphone() {
 
   async function finishReport() {
     const st = useSoftphone.getState();
-    if (st.phase !== 'connected' || !st.peer) return;
+    if (st.phase !== 'connected' || !st.peer || finishing.current) return;
+    finishing.current = true;
+    try {
+      await sendReport(st);
+    } finally {
+      finishing.current = false;
+    }
+  }
+
+  async function sendReport(st: ReturnType<typeof useSoftphone.getState>) {
+    if (!st.peer) return;
+    const seq = callSeq.current;
+    const live = () => alive.current && callSeq.current === seq;
     listener.current?.stop();
     listener.current = null;
-    await recording.current?.stop();
+    const rec = await recording.current?.stop();
     recording.current = null;
-    const transcript = (textMode ? typed : heard).trim();
+    let transcript = (textMode ? typed : heard).trim();
+    if (!textMode && serverStt.current && rec?.blob) {
+      setRecognizing(true);
+      const a = run.current?.scenario.incident.address;
+      const text = await recognize(rec.blob, a ? [a.street, a.house].filter(Boolean) : []);
+      if (alive.current) setRecognizing(false);
+      if (!live()) return; // звонок сброшен, пока распознавали
+      if (!text) {
+        // распознать не вышло — доклад вводится текстом, звонок продолжается
+        setSttNote(text === null ? 'Сервер распознавания не ответил' : 'Речь не распознана');
+        setTextMode(true);
+        return;
+      }
+      transcript = text;
+    }
     const reply = peerReply(st.peer, st.number, transcript, run.current?.scenario ?? null);
     sp.patch({
       phase: 'reply',
       lines: [...st.lines, { who: 'me', text: transcript || '(тишина)' }, { who: 'peer', text: reply }],
     });
     await speak(reply, st.peer.voice);
-    if (!alive.current) return;
+    if (!live()) return;
     sp.patch({ phase: 'ended' });
     run.callEnded(st.peer.contactId, transcript, { from: st.peer.title, text: reply });
     busy();
@@ -99,6 +150,8 @@ export function Softphone() {
 
   function hangup() {
     const st = useSoftphone.getState();
+    callSeq.current++;
+    setRecognizing(false);
     timers.current.forEach(clearTimeout);
     timers.current = [];
     listener.current?.stop();
@@ -201,17 +254,17 @@ export function Softphone() {
                 <>
                   <div className="flex items-center gap-2">
                     <IcMic size={16} />
-                    <span>Говорите — идёт распознавание</span>
+                    <span>{recognizing ? 'Распознаю доклад…' : serverSttOn ? 'Идёт запись — говорите' : 'Говорите — идёт распознавание'}</span>
                     <span className="ml-auto h-2 w-2 animate-pulse bg-arm-orange" />
                   </div>
-                  <div className="mt-1.5 min-h-10 bg-[#5d6a73] px-2 py-1.5">{heard || <span className="text-[#cfd5d9]">…</span>}</div>
+                  {!serverSttOn && <div className="mt-1.5 min-h-10 bg-[#5d6a73] px-2 py-1.5">{heard || <span className="text-[#cfd5d9]">…</span>}</div>}
                   <button onClick={() => setTextMode(true)} className="mt-1 text-[11px] text-[#dfe3e6] underline">
                     микрофон недоступен — ввести доклад текстом
                   </button>
                 </>
               ) : (
                 <>
-                  <div className="text-[11px] text-[#dfe3e6]">Распознавание речи недоступно — введите доклад текстом</div>
+                  <div className="text-[11px] text-[#dfe3e6]">{sttNote ? `${sttNote} — введите доклад текстом` : 'Распознавание речи недоступно — введите доклад текстом'}</div>
                   <textarea
                     autoFocus
                     value={typed}
@@ -228,7 +281,7 @@ export function Softphone() {
                   />
                 </>
               )}
-              <button onClick={() => void finishReport()} className={cx(lineBtn, 'mt-2 h-9 w-full font-bold')}>
+              <button onClick={() => void finishReport()} disabled={recognizing} className={cx(lineBtn, 'mt-2 h-9 w-full font-bold disabled:opacity-60')}>
                 закончить доклад
               </button>
             </div>

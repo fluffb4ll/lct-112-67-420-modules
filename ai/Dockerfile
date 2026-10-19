@@ -2,14 +2,16 @@
 # Контекст сборки — папка ai/:  docker build -t dds-ai ai/
 #
 # Аргументы:
-#   EXTRAS  — дополнительные зависимости через запятую, например "llm-llamacpp"
-#             (для локальной LLM; нужен компилятор, поэтому ставится build-essential).
-# Веса моделей в образ не кладутся: монтируйте каталог в /models и задайте
-#   DDS_LLM_MODEL_PATH=/models/<файл>.gguf
+#   EXTRAS  — дополнительные зависимости через запятую. По умолчанию локальная LLM
+#             (llama.cpp, нужен компилятор, поэтому ставится build-essential), распознавание
+#             (faster-whisper) и синтез речи (Piper). EXTRAS="" — лёгкий образ только на правилах.
+# Веса моделей в образ не кладутся: их докачивает в том /models сервис models из
+# docker-compose.yml (ai/docker/fetch-models.sh); пути задаются DDS_LLM_MODEL_PATH,
+# DDS_STT_MODEL, DDS_TTS_VOICE_PATH, DDS_TTS_VOICE_PATH_MALE.
 
 FROM python:3.11-slim
 
-ARG EXTRAS=""
+ARG EXTRAS="llm-llamacpp,voice-fasterwhisper,voice-piper"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

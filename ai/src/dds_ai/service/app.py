@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from datetime import UTC, datetime
@@ -19,15 +20,21 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field, TypeAdapter
+from starlette.concurrency import run_in_threadpool
 
 from dds_ai import __version__
+from dds_ai.bridge.compose import compose_scenario
+from dds_ai.bridge.evaluate import evaluate_card
+from dds_ai.bridge.voice import MAX_AUDIO_BYTES, VoiceService, VoiceUnavailable
 from dds_ai.contracts import CONTRACTS_VERSION, SCHEMA_MODELS
 from dds_ai.contracts.events import DispatcherDecision, attempt_event_adapter
 from dds_ai.contracts.rubric import Rubric
 from dds_ai.cycle import Channel, TrainingSession, load_synthetic
 from dds_ai.ports import LLMProvider, SemanticJudge
+
+log = logging.getLogger(__name__)
 
 CONFIG = Path(__file__).resolve().parents[3] / "config"
 
@@ -59,18 +66,32 @@ class Say(BaseModel):
     text: str = Field(min_length=1)
 
 
+class Speak(BaseModel):
+    text: str
+    voice: str = "female"
+    intonation: str = "neutral"
+
+
 class Submit(BaseModel):
     incomplete: bool = False
 
 
 def _load_models() -> tuple[LLMProvider | None, SemanticJudge | None]:
+    """LLM из DDS_LLM_MODEL_PATH. Нет файла или пакета — сервис работает на правилах."""
     path = os.environ.get("DDS_LLM_MODEL_PATH")
     if not path:
         return None, None
-    from dds_ai.judging import LLMSemanticJudge
-    from dds_ai.llm.llamacpp_provider import LlamaCppProvider
+    if not Path(path).is_file():
+        log.warning("LLM не загружена: нет файла %s — оценка и сценарии по правилам", path)
+        return None, None
+    try:
+        from dds_ai.judging import LLMSemanticJudge
+        from dds_ai.llm.llamacpp_provider import LlamaCppProvider
 
-    llm = LlamaCppProvider(path)
+        llm = LlamaCppProvider(path, n_ctx=int(os.environ.get("DDS_LLM_N_CTX", "4096")))
+    except Exception as exc:
+        log.warning("LLM не загружена (%s) — оценка и сценарии по правилам", exc)
+        return None, None
     return llm, LLMSemanticJudge(llm)
 
 
@@ -80,9 +101,15 @@ def _dump(obj: Any) -> Any:
     return obj
 
 
-def create_app(*, llm: LLMProvider | None = None, judge: SemanticJudge | None = None) -> FastAPI:
+def create_app(
+    *,
+    llm: LLMProvider | None = None,
+    judge: SemanticJudge | None = None,
+    voice: VoiceService | None = None,
+) -> FastAPI:
     if llm is None and judge is None:
         llm, judge = _load_models()
+    voice = voice or VoiceService()
     rubric = Rubric.model_validate(json.loads((CONFIG / "rubric.w01.json").read_text("utf-8")))
     scenarios = load_synthetic()
     attempts: dict[UUID, TrainingSession] = {}
@@ -112,6 +139,85 @@ def create_app(*, llm: LLMProvider | None = None, judge: SemanticJudge | None = 
             "contracts_version": CONTRACTS_VERSION,
             "llm": None if llm is None else _dump(llm.model_ref),
         }
+
+    # --- мост к бэкенду (backend/.../client/AiEvaluationClient.java) ---
+
+    @app.get("/api/v1/ai/preflight")
+    def preflight() -> dict[str, Any]:
+        def component(name: str, version: str | None) -> dict[str, Any]:
+            return {
+                "component": name,
+                "health": "ok" if version is not None else "fallback",
+                "modelVersion": version,
+                "queueLength": 0,
+                "lane": "local",
+                "running": 0,
+            }
+
+        return {
+            "profile": "offline",
+            "components": [
+                component("rules", __version__),
+                component("llm", None if llm is None else llm.model_ref.model_version),
+            ],
+            "voicePathOk": True,
+        }
+
+    @app.post("/api/v1/ai/evaluate")
+    def evaluate_submitted_card(body: dict[str, Any]) -> dict[str, Any]:
+        # sync-обработчик: FastAPI выполняет его в пуле потоков, LLM не блокирует цикл событий
+        try:
+            return evaluate_card(body, llm)
+        except Exception:
+            if llm is None:
+                raise
+            # сбой судьи не должен оставлять карточку без оценки — считаем по правилам
+            log.exception("LLM evaluation failed, falling back to rules")
+            return evaluate_card(body, None)
+
+    # --- мост к фронту (frontend/src/api/ai.ts, через nginx /ai/) ---
+
+    @app.post("/v1/scenarios/compose")
+    def compose(body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return compose_scenario(body, llm)
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
+            raise HTTPException(422, f"bad scenario draft: {exc}") from exc
+
+    @app.get("/v1/voice")
+    def voice_caps() -> dict[str, Any]:
+        return voice.capabilities()
+
+    @app.post("/v1/stt")
+    async def stt(request: Request, hints: str = "") -> dict[str, Any]:
+        # тело — сама запись (audio/webm, ogg, wav): без multipart, чтобы не тянуть зависимость
+        if int(request.headers.get("content-length") or 0) > MAX_AUDIO_BYTES:
+            raise HTTPException(413, "запись слишком длинная")
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_AUDIO_BYTES:
+                raise HTTPException(413, "запись слишком длинная")
+            chunks.append(chunk)
+        audio = b"".join(chunks)
+        try:
+            words = [h for h in hints.split(",") if h]
+            return await run_in_threadpool(voice.transcribe, audio, words)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except VoiceUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+
+    @app.post("/v1/tts")
+    def tts(body: Speak) -> Response:
+        try:
+            wav = voice.synthesize(body.text, voice=body.voice, intonation=body.intonation)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except VoiceUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return Response(wav, media_type="audio/wav")
 
     @app.get("/v1/contracts")
     def contracts() -> dict[str, Any]:

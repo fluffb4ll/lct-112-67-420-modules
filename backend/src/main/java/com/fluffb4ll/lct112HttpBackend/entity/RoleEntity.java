@@ -37,6 +37,7 @@ public class RoleEntity {
     public Set<String> getPermissionsAsSet() {
         if (permissions == null) return Collections.emptySet();
         return Arrays.stream(permissions)
+                .filter(Permissions::isKnown)
                 .map(Permissions::fromIndex)
                 .map(Permissions::name)
                 .collect(Collectors.toSet());

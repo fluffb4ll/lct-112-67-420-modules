@@ -190,7 +190,9 @@ export function generateScenarios(c: Classifier, p: GenerateParams): Scenario[] 
 
     out.push({
       id: newId('sc'),
-      title: `${cap(t.t)}${comp !== 'none' ? ` — ${COMPLICATION_LABELS[comp].toLowerCase()}` : ''}`,
+      // осложнение обучающийся выясняет сам — в названии (видно в списке занятий) его нет,
+      // преподавателю оно видно в пояснении эталона
+      title: `${cap(t.t)}, ${houseLabel}`,
       station: 'dds',
       serviceKind: 'uprava',
       difficulty: p.difficulty,

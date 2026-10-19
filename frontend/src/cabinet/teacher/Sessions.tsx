@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { PageResponse } from '../../api/admin';
 import { describeError } from '../../api/errors';
+import { ApiError } from '../../api/http';
 import { listScenarios, type ScenarioRow } from '../../api/scenarios';
 import {
   endSession,
   evaluateCard,
   getEvaluation,
+  requestAiEvaluation,
   getSession,
   listSessions,
   startSession,
@@ -399,6 +401,24 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
     }
   };
 
+  const askAi = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      setEvaluation(await requestAiEvaluation(card.id));
+    } catch (e) {
+      // 503 — ИИ-контур недоступен: показываем текст сервера и перечитываем статус оценки
+      if (e instanceof ApiError && e.status === 503) {
+        setErr(e.message);
+        void getEvaluation(card.id).then(setEvaluation, () => undefined);
+      } else {
+        setErr(describeError(e, 'ИИ-контур не ответил'));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const errors = evaluation?.aiComplianceErrors ? Object.entries(evaluation.aiComplianceErrors) : [];
 
   return (
@@ -408,6 +428,9 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
       footer={
         <>
           <Button onClick={onClose}>Отмена</Button>
+          <Button disabled={busy} onClick={() => void askAi()}>
+            {evaluation?.aiScore != null ? 'Оценить ИИ заново' : 'Запросить оценку ИИ'}
+          </Button>
           <Button variant="primary" disabled={busy} onClick={() => void save()}>
             {busy ? 'Сохранение…' : 'Сохранить оценку'}
           </Button>
@@ -420,12 +443,16 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
           <Notice tone="neutral">Оценка ИИ ещё не готова или недоступна — можно выставить свою.</Notice>
         ) : (
           <div className="border border-c-line p-3 text-[13px]">
+            {evaluation.aiStatus === 'UNAVAILABLE' && (
+              <Notice tone="warn">ИИ-контур недоступен — оценки ИИ нет. Запросите заново позже или выставьте свою.</Notice>
+            )}
+            {evaluation.aiStatus === 'PENDING' && <Notice tone="neutral">ИИ оценивает карточку…</Notice>}
             <div>
               <b>Оценка ИИ:</b> {evaluation.aiScore ?? '—'}
               {evaluation.finalScore != null && <span className="text-c-muted"> · итог {evaluation.finalScore}</span>}
             </div>
-            {evaluation.aiRecommendations && <div className="mt-1 text-c-muted">{evaluation.aiRecommendations}</div>}
-            {!!errors.length && (
+            {evaluation.aiRecommendations && <div className="mt-1 whitespace-pre-line text-c-muted">{evaluation.aiRecommendations}</div>}
+            {!evaluation.aiRecommendations && !!errors.length && (
               <ul className="mt-1 list-disc pl-5 text-c-muted">
                 {errors.map(([k, v]) => (
                   <li key={k}>

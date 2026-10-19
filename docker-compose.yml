@@ -22,19 +22,46 @@ services:
     networks:
       - dds-network
 
-  # ИИ-контур (Python HTTP-сервис)
+  # Разовая докачка весов ИИ-контура в том ai_models (LLM, faster-whisper, голоса Piper).
+  # Скачанное не перекачивается; дальше ИИ-контур работает без сети.
+  # Без сети или с DDS_FETCH_MODELS=0 шаг ничего не делает — контур поднимется на правилах.
+  models:
+    image: curlimages/curl:8.11.1
+    container_name: dds-models
+    user: "0"
+    entrypoint: ["sh", "-c", "[ \"$${DDS_FETCH_MODELS:-1}\" = 1 ] && sh /fetch-models.sh; chown -R 10001 /models; exit 0"]
+    environment:
+      DDS_FETCH_MODELS: ${DDS_FETCH_MODELS:-1}
+      DDS_FETCH_LLM: ${DDS_FETCH_LLM:-1}
+      DDS_LLM_MODEL_URL: ${DDS_LLM_MODEL_URL:-}
+      DDS_LLM_MODEL_PATH: ${DDS_LLM_MODEL_PATH:-/models/llm/model.gguf}
+    volumes:
+      - ai_models:/models
+      - ./ai/docker/fetch-models.sh:/fetch-models.sh:ro
+
+  # ИИ-контур (Python HTTP-сервис): оценка карточек, текст сценариев, распознавание и синтез речи
   ai:
     build:
       context: ./ai
       dockerfile: Dockerfile
+      args:
+        EXTRAS: ${AI_EXTRAS:-llm-llamacpp,voice-fasterwhisper,voice-piper}
     image: ${DOCKER_REGISTRY:-}${DOCKER_REGISTRY:+/}dds-ai:${IMAGE_TAG:-latest}
     container_name: dds-ai
     restart: unless-stopped
     environment:
       DDS_AI_PORT: 8090
-      DDS_LLM_MODEL_PATH: ${DDS_LLM_MODEL_PATH:-/models/model.gguf}
+      DDS_LLM_MODEL_PATH: ${DDS_LLM_MODEL_PATH:-/models/llm/model.gguf}
+      DDS_STT_MODEL: ${DDS_STT_MODEL:-/models/whisper-small}
+      DDS_TTS_VOICE_PATH: /models/piper/ru_RU-irina-medium.onnx
+      DDS_TTS_VOICE_PATH_MALE: /models/piper/ru_RU-denis-medium.onnx
+      HF_HOME: /models/hf
+    depends_on:
+      models:
+        condition: service_completed_successfully
     ports:
-      - "${AI_PORT:-8090}:8090"
+      # ИИ-контур нужен только бэкенду и nginx внутри сети compose; наружу — лишь на localhost
+      - "${AI_BIND:-127.0.0.1}:${AI_PORT:-8090}:8090"
     volumes:
       - ai_models:/models
     healthcheck:
@@ -82,11 +109,14 @@ services:
     restart: unless-stopped
     environment:
       BACKEND_URL: http://backend:8080
+      AI_URL: http://ai:8090
     ports:
       - "${FRONTEND_PORT:-80}:80"
     depends_on:
       backend:
         condition: service_started
+      ai:
+        condition: service_healthy
     networks:
       - dds-network
 

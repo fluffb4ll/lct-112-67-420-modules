@@ -8,11 +8,14 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const target = env.VITE_API_TARGET || 'http://100.116.127.113:8080'
+  // ИИ-контур (генерация текста сценариев, распознавание и синтез речи)
+  const aiTarget = env.VITE_AI_TARGET || 'http://localhost:8090'
   return {
     plugins: [react(), tailwindcss()],
     server: {
       proxy: {
         '/api': { target, changeOrigin: true },
+        '/ai': { target: aiTarget, changeOrigin: true, rewrite: (p) => p.replace(/^\/ai/, '') },
       },
     },
   }

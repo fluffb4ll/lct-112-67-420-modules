@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dds-ai/skill-profile/0.4.0-draft",
+  "$defs": {
+    "AttemptTrack": {
+      "description": "Фактический трек попытки для профиля и рейтинга — вычисляется из режима и событий.\n\n`help_requested` в самостоятельном режиме переводит попытку в `supported`: она перестаёт\nбыть самостоятельной, но это не «делай как я» (там не было демонстрации, была честная\nпопытка без подсказок до запроса помощи).",
+      "enum": [
+        "guided",
+        "independent",
+        "supported"
+      ],
+      "title": "AttemptTrack",
+      "type": "string"
+    },
+    "GroupLevel": {
+      "additionalProperties": false,
+      "properties": {
+        "group_id": {
+          "minLength": 1,
+          "title": "Group Id",
+          "type": "string"
+        },
+        "level": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Level",
+          "type": "number"
+        },
+        "attempts_used": {
+          "minimum": 1,
+          "title": "Attempts Used",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "group_id",
+        "level",
+        "attempts_used"
+      ],
+      "title": "GroupLevel",
+      "type": "object"
+    },
+    "ProfileStatus": {
+      "enum": [
+        "ok",
+        "insufficient_data"
+      ],
+      "title": "ProfileStatus",
+      "type": "string"
+    },
+    "VersionRef": {
+      "additionalProperties": false,
+      "description": "Ссылка на версионируемый артефакт: сценарий, правила, рубрику, политику времени.",
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "title": "VersionRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Профиль по пяти группам рубрики, отдельно по профилю ДДС, сложности и режиму (D-044).\n\n`difficulty_band`/`track` — сегмент, из которого построен именно этот профиль; полный\nпрофиль ученика — набор `SkillProfile` по разным сегментам, не один документ (6.9).",
+  "properties": {
+    "profile_version_id": {
+      "format": "uuid",
+      "title": "Profile Version Id",
+      "type": "string"
+    },
+    "trainee_id": {
+      "format": "uuid",
+      "title": "Trainee Id",
+      "type": "string"
+    },
+    "dds_profile": {
+      "minLength": 1,
+      "title": "Dds Profile",
+      "type": "string"
+    },
+    "difficulty_band": {
+      "default": "all",
+      "description": "Сегмент по сложности; «all» — без разбивки по сложности",
+      "minLength": 1,
+      "title": "Difficulty Band",
+      "type": "string"
+    },
+    "track": {
+      "$ref": "#/$defs/AttemptTrack",
+      "default": "independent",
+      "description": "Сегмент по режиму (D-041)"
+    },
+    "status": {
+      "$ref": "#/$defs/ProfileStatus"
+    },
+    "groups": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/GroupLevel"
+      },
+      "title": "Groups",
+      "type": "array"
+    },
+    "source_score_versions": {
+      "default": [],
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "title": "Source Score Versions",
+      "type": "array"
+    },
+    "aggregation_rules": {
+      "$ref": "#/$defs/VersionRef"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "profile_version_id",
+    "trainee_id",
+    "dds_profile",
+    "status",
+    "aggregation_rules",
+    "created_at"
+  ],
+  "title": "SkillProfile",
+  "type": "object"
+}

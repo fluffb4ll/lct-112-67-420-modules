@@ -2,10 +2,8 @@ package com.fluffb4ll.lct112HttpBackend.client;
 
 import com.fluffb4ll.lct112HttpBackend.dto.ai.AiEvaluationRequestDto;
 import com.fluffb4ll.lct112HttpBackend.dto.ai.AiEvaluationResponseDto;
-import com.fluffb4ll.lct112HttpBackend.dto.ai.contract.CriterionResultDto;
 import com.fluffb4ll.lct112HttpBackend.dto.ai.contract.PreflightReportDto;
 import com.fluffb4ll.lct112HttpBackend.dto.ai.contract.RecommendationDto;
-import com.fluffb4ll.lct112HttpBackend.dto.ai.contract.ScoreVersionDto;
 import com.fluffb4ll.lct112HttpBackend.model.enums.IncidentComponent;
 import com.fluffb4ll.lct112HttpBackend.model.enums.IncidentSeverity;
 import com.fluffb4ll.lct112HttpBackend.service.SystemIncidentService;
@@ -19,7 +17,8 @@ import org.springframework.web.client.RestClient;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.time.Duration;
-import java.util.*;
+import java.util.Optional;
+import java.util.UUID;
 
 @Slf4j
 @Component
@@ -32,7 +31,7 @@ public class AiEvaluationClient {
     public AiEvaluationClient(
             @Value("${app.ai.service-url:http://localhost:8000}") String serviceUrl,
             @Value("${app.ai.connect-timeout-ms:5000}") int connectTimeoutMs,
-            @Value("${app.ai.read-timeout-ms:30000}") int readTimeoutMs,
+            @Value("${app.ai.read-timeout-ms:90000}") int readTimeoutMs,
             SystemIncidentService systemIncidentService
     ) {
         this.serviceUrl = serviceUrl;
@@ -69,24 +68,7 @@ public class AiEvaluationClient {
         try {
             log.info("Sending operator card {} to AI container for evaluation at {}", request.cardId(), serviceUrl);
 
-            // Attempt to fetch full ScoreVersion contract or standard response
-            try {
-                ScoreVersionDto scoreVersion = restClient.post()
-                        .uri("/api/v1/ai/score-version")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .accept(MediaType.APPLICATION_JSON)
-                        .body(request)
-                        .retrieve()
-                        .body(ScoreVersionDto.class);
-
-                if (scoreVersion != null && scoreVersion.summary() != null) {
-                    return Optional.of(convertScoreVersionToResponse(scoreVersion));
-                }
-            } catch (Exception scoreVerEx) {
-                log.debug("Score-version endpoint not active, falling back to /api/v1/ai/evaluate: {}", scoreVerEx.getMessage());
-            }
-
-            // Fallback endpoint
+            // ИИ-контур отдаёт оценку только через /evaluate (score-version в нём нет)
             AiEvaluationResponseDto response = restClient.post()
                     .uri("/api/v1/ai/evaluate")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -126,43 +108,5 @@ public class AiEvaluationClient {
             log.warn("Could not retrieve AI recommendation for trainee {}: {}", traineeId, e.getMessage());
             return Optional.empty();
         }
-    }
-
-    private AiEvaluationResponseDto convertScoreVersionToResponse(ScoreVersionDto sv) {
-        int totalScore = sv.summary().total() != null ? (int) Math.round(sv.summary().total()) : 0;
-
-        Map<String, Object> grammarScore = new HashMap<>();
-        Map<String, Object> complianceErrors = new HashMap<>();
-        List<String> recommendations = new ArrayList<>();
-
-        if (sv.criterionResults() != null) {
-            for (CriterionResultDto cr : sv.criterionResults()) {
-                if ("grammar".equalsIgnoreCase(cr.criterionId())) {
-                    grammarScore.put("status", cr.status());
-                    grammarScore.put("value", cr.value());
-                    grammarScore.put("explanation", cr.explanation());
-                } else if ("failed".equalsIgnoreCase(cr.status()) || "not_done".equalsIgnoreCase(cr.status())) {
-                    complianceErrors.put(cr.criterionId(), cr.explanation() != null ? cr.explanation() : cr.status());
-                    if (cr.explanation() != null) {
-                        recommendations.add(cr.explanation());
-                    }
-                } else if (cr.explanation() != null) {
-                    recommendations.add(cr.explanation());
-                }
-            }
-        }
-
-        String recText = String.join("\n", recommendations);
-        if (recText.isBlank()) {
-            recText = "Вердикт ИИ: " + (sv.summary().verdict() != null ? sv.summary().verdict() : "passed");
-        }
-
-        return new AiEvaluationResponseDto(
-                totalScore,
-                grammarScore,
-                complianceErrors,
-                recText,
-                totalScore
-        );
     }
 }

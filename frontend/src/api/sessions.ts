@@ -1,6 +1,8 @@
 import type { PageResponse } from './admin';
 import { apiFetch, apiFetchOptional } from './http';
 import type { BackendComplexity } from './scenarios';
+import type { Norms } from '../domain/evaluate';
+import type { TrainingEvent } from '../domain/types';
 
 /*
  * Занятия, карточки обучающихся и оценки (ветка mvp репозитория бэка).
@@ -122,6 +124,8 @@ export interface SubmittedCard {
   services: { assignedServices: string[]; manualServicesAdded: string[]; manualServicesRemoved: string[] };
   decision: { action: string; reason: string; targetDepartment: string };
   dispatch: { whoAccepted: string; calledPhone: string; dispatchNotes: string };
+  /** Журнал действий тренажёра — по нему ИИ-контур оценивает время, статусы, комментарии и доклад */
+  trainingLog?: { events: TrainingEvent[]; chiefContactIds: string[]; norms: Norms };
 }
 
 export interface SubmitCardRequest {
@@ -142,6 +146,8 @@ export interface Evaluation {
   aiGrammarScore: Record<string, unknown> | null;
   aiComplianceErrors: Record<string, unknown> | null;
   aiRecommendations: string | null;
+  /** Состояние оценки ИИ: PENDING — идёт, UNAVAILABLE — ИИ-контур не ответил. */
+  aiStatus?: 'PENDING' | 'OK' | 'UNAVAILABLE' | null;
   teacherScore: number | null;
   teacherComment: string | null;
   evaluatedById: string | null;
@@ -169,5 +175,7 @@ export function listSessions(q: { studyGroupId?: string; teacherId?: string; act
 export const submitCard = (req: SubmitCardRequest) => apiFetch<{ cardId: string }>('/cards/submit', { method: 'POST', body: req });
 export const getCard = (cardId: string) => apiFetch<Record<string, unknown>>(`/cards/${cardId}`);
 export const getEvaluation = (cardId: string) => apiFetch<Evaluation>(`/evaluations/cards/${cardId}`);
+/** Запустить (повторно) оценку ИИ-контура; ответ языковой модели — до минуты */
+export const requestAiEvaluation = (cardId: string) => apiFetch<Evaluation>(`/evaluations/cards/${cardId}/ai`, { method: 'POST' });
 export const evaluateCard = (cardId: string, teacherScore: number, teacherComment: string) =>
   apiFetch<Evaluation>(`/evaluations/cards/${cardId}`, { method: 'POST', body: { teacherScore, teacherComment } });
