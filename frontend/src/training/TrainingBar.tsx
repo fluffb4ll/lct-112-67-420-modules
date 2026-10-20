@@ -61,6 +61,19 @@ export function TrainingBar({
   // завершить можно только открытую карточку — иначе оценивать нечего
   const canFinish = active && !!opened;
 
+  /*
+   * В настоящем АРМ-112 кнопки «завершить карточку» нет: диспетчер закрывает своё участие
+   * статусом, а карточка живёт дальше. У нас она означает «сдаю работу», поэтому к ней нужно
+   * подвести — иначе обучающийся сидит на отработанной карточке и ждёт разбора, которого не
+   * будет. Подсвечиваем, когда первичный статус проставлен, доклад сделан (если он требуется)
+   * и вводных больше не ждём; карточки, закрытые терминальным статусом, сдаются сами.
+   */
+  const scenario = cur?.scenario;
+  const hasPrimary = run.events.some((e) => e.kind === 'status_set' && (e.status === 'Принята' || e.status === 'Не принята'));
+  const reported = !scenario?.expected.callRequired || run.events.some((e) => e.kind === 'call_ended');
+  const brigadeLeft = (scenario?.inputs.length ?? 0) > run.inputs.filter((i) => i.from !== 'Диспетчерская').length;
+  const nudgeFinish = canFinish && !isRecord && hasPrimary && reported && !brigadeLeft;
+
   return (
     <div className="flex h-[56px] shrink-0 items-stretch border-b border-arm-sub bg-arm-dark text-white select-none">
       <div className="flex w-[92px] shrink-0 flex-col items-center justify-center gap-0.5 bg-arm-blue">
@@ -96,12 +109,16 @@ export function TrainingBar({
         <button onClick={onTogglePanel} className={cx(btn, panelOpen && 'bg-arm-sub')}>
           панель
         </button>
+        {nudgeFinish && <span className="self-center text-[12px] text-[#ffd0bd]">карточка отработана — сдайте её</span>}
         <button
           data-step="finish-card"
           onClick={onFinish}
           disabled={!canFinish}
-          title={active && !opened ? 'Сначала откройте карточку' : undefined}
-          className="flex h-9 items-center border border-white px-4 text-[15px] font-bold text-white hover:bg-arm-sub disabled:cursor-default disabled:border-[#aab4ba] disabled:opacity-40 disabled:hover:bg-transparent"
+          title={active && !opened ? 'Сначала откройте карточку' : nudgeFinish ? 'По карточке всё сделано — сдайте работу на проверку' : undefined}
+          className={cx(
+            'flex h-9 items-center border px-4 text-[15px] font-bold text-white hover:bg-arm-sub disabled:cursor-default disabled:border-[#aab4ba] disabled:opacity-40 disabled:hover:bg-transparent',
+            nudgeFinish ? 'animate-pulse border-arm-orange bg-arm-orange hover:bg-arm-orange' : 'border-white',
+          )}
         >
           {isRecord ? 'сохранить запись' : 'завершить карточку'}
         </button>

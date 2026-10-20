@@ -158,7 +158,7 @@ export function StudentHome() {
                     <span className="text-4xl font-medium">{ready.index}</span>
                     <span className="text-sm text-c-muted">из 100 · {ready.level}</span>
                   </div>
-                  <p className="mt-1 text-[12px] text-c-muted">Оценка по рейтингу навыков (модель Эло), пересчитывается после каждой карточки.</p>
+                  <p className="mt-1 text-[12px] text-c-muted">Считается по результатам сданных карточек и пересчитывается после каждой.</p>
                   <div className="mt-4">
                     <HBars
                       items={SKILLS.map((s) => ({ label: SKILL_LABELS[s], value: Math.max(0, Math.min(100, Math.round(((ratings[s] - 850) / 400) * 100))) }))}
