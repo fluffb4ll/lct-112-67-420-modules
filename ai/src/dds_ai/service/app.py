@@ -89,7 +89,14 @@ def _load_models() -> tuple[LLMProvider | None, SemanticJudge | None]:
         from dds_ai.judging import LLMSemanticJudge
         from dds_ai.llm.llamacpp_provider import LlamaCppProvider
 
-        llm = LlamaCppProvider(path, n_ctx=int(os.environ.get("DDS_LLM_N_CTX", "4096")))
+        # DDS_LLM_N_THREADS — на сколько потоков считать. Без переменной llama.cpp берёт
+        # половину логических ядер; на слабом сервере генерация упирается именно в это,
+        # и текст сценария не успевает дописаться к сроку (bridge/compose.py)
+        llm = LlamaCppProvider(
+            path,
+            n_ctx=int(os.environ.get("DDS_LLM_N_CTX", "4096")),
+            n_threads=int(os.environ.get("DDS_LLM_N_THREADS") or 0) or None,
+        )
     except Exception as exc:
         log.warning("LLM не загружена (%s) — оценка и сценарии по правилам", exc)
         return None, None

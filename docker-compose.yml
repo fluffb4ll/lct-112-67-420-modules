@@ -52,6 +52,9 @@ services:
     environment:
       DDS_AI_PORT: 8090
       DDS_LLM_MODEL_PATH: ${DDS_LLM_MODEL_PATH:-/models/llm/model.gguf}
+      # сколько потоков отдать модели; пусто — половина логических ядер (умолчание llama.cpp).
+      # На слабом сервере генерация текста сценария упирается именно в это
+      DDS_LLM_N_THREADS: ${DDS_LLM_N_THREADS:-}
       DDS_STT_MODEL: ${DDS_STT_MODEL:-/models/whisper-small}
       DDS_TTS_VOICE_PATH: /models/piper/ru_RU-irina-medium.onnx
       DDS_TTS_VOICE_PATH_MALE: /models/piper/ru_RU-denis-medium.onnx

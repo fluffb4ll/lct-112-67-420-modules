@@ -108,16 +108,22 @@ def test_spoiler_with_punctuation_is_caught():
     assert "description" in out["rejected"]
 
 
+def test_text_is_asked_apart_from_the_service_fields():
+    """Два запроса: сначала название и описание, потом служебные тексты — так короче ответ."""
+    llm = answer()
+    compose_scenario({"scenario": draft(), "complication": "zone"}, llm)
+    assert len(llm.prompts) == 2
+    assert "chief_reply" not in llm.prompts[0]
+    assert "sample_report" in llm.prompts[1]
+
+
 def test_second_attempt_when_the_first_answer_is_unusable():
-    """Негодный первый ответ — модель просят ещё раз: иначе в сценарии остался бы шаблон."""
-    empty = json.dumps(
-        {"title": "", "description": "", "chief_reply": "", "sample_report": "", "inputs": []}
-    )
+    """Негодный ответ про текст — просим его ещё раз: иначе в сценарии остался бы шаблон."""
     usable = answer()
-    first = [empty]
+    first = [json.dumps({"title": "", "description": ""})]
     llm = FakeLLM(lambda p: first.pop(0) if first else usable.answer(p))
     out = compose_scenario({"scenario": draft(), "complication": "zone"}, llm)
-    assert len(llm.prompts) == 2
+    assert len(llm.prompts) == 3
     assert out["by"] == "llm"
     assert out["scenario"]["incident"]["descriptions"][0]["text"].startswith("Женщина застряла")
 

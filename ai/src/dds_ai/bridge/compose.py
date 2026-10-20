@@ -18,33 +18,38 @@ from ..ports import LLMProvider
 from .llm import ask_json
 from .rules import match_groups
 
-COMPOSE_SCHEMA = {
+# Пять полей просятся двумя запросами, а не одним. Адаптер llama.cpp по тайм-ауту выбрасывает
+# всё, что успел написать, поэтому один длинный ответ на слабом сервере пропадает целиком и
+# сценарий остаётся шаблонным. Сначала спрашиваем то, что видно преподавателю и обучающемуся —
+# название и описание; служебные тексты идут вторым запросом, на остаток срока.
+TEXT_SCHEMA = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}, "description": {"type": "string"}},
+    "required": ["title", "description"],
+    "additionalProperties": False,
+}
+REST_SCHEMA = {
     "type": "object",
     "properties": {
-        "title": {"type": "string"},
-        "description": {"type": "string"},
         "chief_reply": {"type": "string"},
         "sample_report": {"type": "string"},
         "inputs": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
     },
-    "required": ["title", "description", "chief_reply", "sample_report", "inputs"],
+    "required": ["chief_reply", "sample_report", "inputs"],
     "additionalProperties": False,
 }
 
-# Срок генерации и длина ответа. Адаптер llama.cpp по тайм-ауту выбрасывает всё, что успел
-# написать, поэтому не успеть — то же самое, что не ответить: в сценарии останется заготовка.
-# На процессоре слабого сервера 1,5-миллиардная модель выдаёт порядка десяти токенов в секунду,
-# а на пять полей хватает примерно трёхсот — отсюда и срок, и потолок длины.
-COMPOSE_TIMEOUT_S = 70.0
-MAX_COMPOSE_TOKENS = 420
-# Небольшая модель с первого раза часто промахивается мимо требований. Вторая попытка короче
-# и по сроку, и по длине ответа — помогает и когда написано негодное, и когда не успела.
-ATTEMPTS = 2
-RETRY_TIMEOUT_S = 30.0
-RETRY_TOKENS = 300
-# Общий срок на обе попытки: дольше ждёт уже не фронт, а nginx (120 с), и ответ пропадёт зря
+TEXT_TIMEOUT_S = 45.0
+TEXT_TOKENS = 200
+REST_TIMEOUT_S = 35.0
+REST_TOKENS = 240
+# Небольшая модель с первого раза часто промахивается мимо требований; повтор короче и по
+# сроку, и по длине — помогает и когда написано негодное, и когда не успела
+RETRY_TIMEOUT_S = 25.0
+RETRY_TOKENS = 160
+# Общий срок на все запросы: дольше ждёт уже не фронт, а nginx (120 с), и ответ пропадёт зря
 BUDGET_S = 100.0
-MIN_SLICE_S = 20.0
+MIN_SLICE_S = 15.0
 RETRY_HINT = (
     "\nПредыдущий ответ не подошёл: он не выполнил требования выше. "
     "Напиши заново, короче и строго по требованиям. Ответь только JSON."
@@ -91,53 +96,77 @@ def _address(scenario: dict[str, Any]) -> str:
     return ", ".join(p for p in parts if p)
 
 
-def _prompt(scenario: dict[str, Any], complication: str, difficulty: int) -> str:
+def _context(scenario: dict[str, Any], complication: str, difficulty: int) -> list[str]:
+    """Общая часть обоих запросов: что за происшествие и кто звонит."""
     inc = scenario.get("incident", {})
-    exp = scenario.get("expected", {})
     typ = inc.get("type", {}) or {}
-    descriptions = inc.get("descriptions") or [{}]
-    inputs = scenario.get("inputs") or []
     applicant = inc.get("applicant", {}) or {}
-    samples = exp.get("sample") or {}
-    lines = [
-        "Ты пишешь учебный сценарий для тренажёра диспетчера ДДС (дежурно-диспетчерской службы "
-        "управы района) системы 112 Москвы. Данные синтетические.",
+    return [
+        "Ты пишешь учебный сценарий для тренажёра диспетчера дежурно-диспетчерской службы "
+        "управы района (система 112 Москвы). Данные синтетические.",
         "",
         f"Тип происшествия: {typ.get('finalType', '')} (группа «{typ.get('card', '')}»)",
         f"Признаки: {', '.join(typ.get('signs') or [])}",
         f"Адрес: {_address(scenario)}",
         f"Заявитель: {applicant.get('name', '')}, {applicant.get('status', '')}",
-        "Скрытая особенность (диспетчер выясняет её сам — в title, description и inputs "
-        "не упоминай): " + COMPLICATION_HINTS.get(complication, DEFAULT_HINT),
+        "Скрытая особенность (диспетчер выясняет её сам, писать о ней нельзя): "
+        + COMPLICATION_HINTS.get(complication, DEFAULT_HINT),
         f"Сложность: {DIFFICULTY_HINTS.get(difficulty, DIFFICULTY_HINTS[1])}",
-        f"Верные действия диспетчера: статусы {' → '.join(exp.get('path') or [])}",
-        f"Эталонные комментарии: {'; '.join(f'{k}: {v}' for k, v in samples.items())}",
         "",
-        "Черновик (перепиши живее и конкретнее, факты не меняй):",
-        f"title: {scenario.get('title', '')}",
-        f"description: {descriptions[0].get('text', '')}",
-        f"chief_reply: {scenario.get('chiefReply', '')}",
-        f"sample_report: {exp.get('sampleReport', '')}",
-        "inputs: " + " | ".join(i.get("text", "") for i in inputs),
-        "",
-        "Требования:",
-        "title — короткое название сценария, до 90 знаков;",
-        "description — описание происшествия, как его записал оператор 112 со слов заявителя: "
-        "2–4 предложения, конкретные детали (этаж, что видно, есть ли пострадавшие); "
-        "адрес не повторяй;",
-        "chief_reply — ответ руководителя диспетчеру по телефону, разговорный, 1–3 предложения, "
-        "сохрани названия организаций из черновика, закончи «Конец связи.»;",
-        "sample_report — эталонный доклад диспетчера руководителю: начни «Докладываю:», назови "
-        "улицу и номер дома, суть происшествия и принятые меры;",
-        f"inputs — ровно {len(inputs)} реплик исполнителя в том же порядке и с тем же смыслом "
-        "(пустой список, если черновик пуст).",
-        # служебные слова задания модель охотно повторяет в названии и описании, а проверка
-        # такой текст отклоняет и оставляет шаблон — просим не брать их сразу
-        "В title и description не пиши служебные слова задания: ДДС, реагирование, организация, "
-        "дубль, зарегистрирована, отказ, чужой. Пиши только о самом происшествии.",
-        "Пиши по-русски. Ответь только JSON.",
     ]
-    return "\n".join(lines)
+
+
+def _text_prompt(scenario: dict[str, Any], complication: str, difficulty: int) -> str:
+    """То, что видно в банке и в занятии: название и описание происшествия."""
+    descriptions = scenario.get("incident", {}).get("descriptions") or [{}]
+    return "\n".join(
+        _context(scenario, complication, difficulty)
+        + [
+            "Черновик (перепиши живее и конкретнее, факты не меняй):",
+            f"title: {scenario.get('title', '')}",
+            f"description: {descriptions[0].get('text', '')}",
+            "",
+            "Требования:",
+            "title — короткое название сценария, до 90 знаков;",
+            "description — описание происшествия, как его записал оператор 112 со слов "
+            "заявителя: 2–4 предложения, конкретные детали (этаж, что видно, есть ли "
+            "пострадавшие); адрес не повторяй.",
+            # служебные слова задания модель охотно повторяет, а проверка такой текст
+            # отклоняет и оставляет шаблон — просим не брать их сразу
+            "Не пиши служебные слова задания: ДДС, реагирование, организация, дубль, "
+            "зарегистрирована, отказ, чужой. Пиши только о самом происшествии.",
+            "Пиши по-русски. Ответь только JSON.",
+        ]
+    )
+
+
+def _rest_prompt(scenario: dict[str, Any], complication: str, difficulty: int) -> str:
+    """Служебные тексты: ответ руководителя, эталонный доклад, реплики исполнителя."""
+    exp = scenario.get("expected", {}) or {}
+    samples = exp.get("sample") or {}
+    inputs = scenario.get("inputs") or []
+    return "\n".join(
+        _context(scenario, complication, difficulty)
+        + [
+            f"Верные действия диспетчера: статусы {' → '.join(exp.get('path') or [])}",
+            f"Эталонные комментарии: {'; '.join(f'{k}: {v}' for k, v in samples.items())}",
+            "",
+            "Черновик (перепиши живее, факты не меняй):",
+            f"chief_reply: {scenario.get('chiefReply', '')}",
+            f"sample_report: {exp.get('sampleReport', '')}",
+            "inputs: " + " | ".join(i.get("text", "") for i in inputs),
+            "",
+            "Требования:",
+            "chief_reply — ответ руководителя диспетчеру по телефону, разговорный, "
+            "1–3 предложения, сохрани названия организаций из черновика, закончи "
+            "«Конец связи.»;",
+            "sample_report — эталонный доклад диспетчера руководителю: начни «Докладываю:», "
+            "назови улицу и номер дома, суть происшествия и принятые меры;",
+            f"inputs — ровно {len(inputs)} реплик исполнителя в том же порядке и с тем же "
+            "смыслом (пустой список, если черновик пуст).",
+            "Пиши по-русски. Ответь только JSON.",
+        ]
+    )
 
 
 def _text(value: Any, lo: int, hi: int) -> str | None:
@@ -233,31 +262,37 @@ def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str,
         scenario["expected"] = {}
     exp = scenario["expected"]
 
-    prompt = _prompt(draft, complication, difficulty)
     applied: list[str] = []
     rejected: list[str] = []
-    # пока модель не дала ни одного годного поля, пробуем ещё раз: иначе в сценарии
-    # останется текст заготовки, ради которого генерацию никто не запускает
     started = time.monotonic()
-    for attempt in range(ATTEMPTS if llm is not None else 1):
-        left = BUDGET_S - (time.monotonic() - started)
-        if attempt and left < MIN_SLICE_S:
-            break
+
+    def left() -> float:
+        return BUDGET_S - (time.monotonic() - started)
+
+    def ask(prompt: str, schema: dict[str, Any], tokens: int, limit: float) -> None:
+        nonlocal applied, rejected
         out = ask_json(
-            llm,
-            prompt if attempt == 0 else prompt + RETRY_HINT,
-            schema=COMPOSE_SCHEMA,
-            max_tokens=MAX_COMPOSE_TOKENS if attempt == 0 else RETRY_TOKENS,
-            timeout_s=min(COMPOSE_TIMEOUT_S if attempt == 0 else RETRY_TIMEOUT_S, left),
+            llm, prompt, schema=schema, max_tokens=tokens, timeout_s=min(limit, left())
         )
         if out is None:
-            continue
+            return
         got, bad = _apply(out, scenario, exp, complication)
         applied = list(dict.fromkeys(applied + got))
         rejected = list(dict.fromkeys(rejected + bad))
-        # ради названия и описания генерацию и запускают — остальные поля ждать не стоит
-        if "title" in applied or "description" in applied:
-            break
+
+    if llm is not None:
+        text_prompt = _text_prompt(draft, complication, difficulty)
+        ask(text_prompt, TEXT_SCHEMA, TEXT_TOKENS, TEXT_TIMEOUT_S)
+        # ради названия и описания генерацию и запускают: не вышло — просим ещё раз, короче
+        if not {"title", "description"} & set(applied) and left() >= MIN_SLICE_S:
+            ask(text_prompt + RETRY_HINT, TEXT_SCHEMA, RETRY_TOKENS, RETRY_TIMEOUT_S)
+        if left() >= MIN_SLICE_S:
+            ask(
+                _rest_prompt(draft, complication, difficulty),
+                REST_SCHEMA,
+                REST_TOKENS,
+                REST_TIMEOUT_S,
+            )
 
     if applied:
         note = (
