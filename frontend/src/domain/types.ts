@@ -42,7 +42,8 @@ export interface Role {
   builtIn: boolean;
 }
 
-export type Station = 'dds' | '112';
+/** Тренажёр готовит диспетчера ДДС; рабочее место оператора 112 в учебном ПО не воспроизводится */
+export type Station = 'dds';
 
 export interface User {
   id: string;
@@ -205,6 +206,10 @@ export interface ScenarioInput {
   delaySec: number;
   from: string; // «Мастер участка»
   text: string;
+  /** Как приходит: звонком на софтфон (доклад бригады) или строкой в панель «Вводные» */
+  via?: 'call' | 'panel';
+  /** Голос звонящего при синтезе речи */
+  voice?: 'male' | 'female';
 }
 
 /** Шаг режима «делай как я» */
@@ -250,6 +255,16 @@ export interface Scenario {
   createdAt: string;
   approvedBy?: string;
   approvedAt?: string;
+  /** Норматив на отработку карточки, секунд (задаёт преподаватель) */
+  timeLimitSec?: number;
+  /**
+   * Телефонный справочник занятия: кому обучающийся может позвонить с учебного телефона.
+   * Список задаёт преподаватель — до десяти номеров на одну ДДС. Пусто — в справочнике
+   * номера самой службы. Номер заявителя добавляется флагом `withApplicant`.
+   */
+  phonebook?: ScenarioPhone[];
+  /** Показывать в справочнике номер заявителя из карточки (АОН) */
+  withApplicant?: boolean;
   /** Шаблон карточки. id/время/служба обучающегося подставляются при выдаче */
   incident: Omit<Incident, 'id' | 'createdAt'>;
   expected: ScenarioExpected;
@@ -282,6 +297,17 @@ export interface DdsService {
   district?: string;
   /** Быстрый набор софтфона: кому докладывает диспетчер */
   contacts: SoftphoneContact[];
+}
+
+/** Строка телефонного справочника, которую завёл преподаватель (пункт 8 рекомендаций) */
+export interface ScenarioPhone {
+  title: string;
+  number: string;
+  voice: 'male' | 'female';
+  /** Чем ответит абонент, если это не руководитель и не исполнитель */
+  reply?: string;
+  /** Руководитель смены: ему докладывают, его ответ разбирается в оценке */
+  isChief?: boolean;
 }
 
 export interface SoftphoneContact {
@@ -324,6 +350,8 @@ export type TrainingEventKind =
   | 'call_connected'
   | 'call_ended'
   | 'input_received'
+  | 'call_incoming'
+  | 'call_missed'
   | 'hint'
   | 'finished';
 

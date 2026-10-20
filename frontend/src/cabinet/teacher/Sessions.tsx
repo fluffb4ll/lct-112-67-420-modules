@@ -6,11 +6,13 @@ import { listScenarios, type ScenarioRow } from '../../api/scenarios';
 import {
   endSession,
   evaluateCard,
+  getCard,
   getEvaluation,
   requestAiEvaluation,
   getSession,
   listSessions,
   startSession,
+  type CardDetails,
   type CardSummary,
   type Evaluation,
   type SessionDetails,
@@ -315,6 +317,7 @@ export function SessionModal({ id, onClose, studentId }: { id: string; onClose: 
   const [data, setData] = useState<SessionDetails | null>(null);
   const [err, setErr] = useState('');
   const [scoreFor, setScoreFor] = useState<CardSummary | null>(null);
+  const [cardFor, setCardFor] = useState<CardSummary | null>(null);
   const cards = data?.cards.filter((c) => !studentId || c.studentId === studentId);
   const evals = useCardEvaluations(cards, true);
 
@@ -376,7 +379,10 @@ export function SessionModal({ id, onClose, studentId }: { id: string; onClose: 
                   </td>
                   <td><CardBadge status={c.status} ev={evals[c.id]} /></td>
                   <td>
-                    <div className="flex justify-end">
+                    <div className="flex justify-end gap-1.5">
+                      <Button size="sm" variant="ghost" onClick={() => setCardFor(c)}>
+                        Работа
+                      </Button>
                       <Button size="sm" variant="ghost" onClick={() => setScoreFor(c)}>
                         Оценка
                       </Button>
@@ -389,6 +395,8 @@ export function SessionModal({ id, onClose, studentId }: { id: string; onClose: 
         )}
       </div>
 
+      {cardFor && <CardModal card={cardFor} onClose={() => setCardFor(null)} />}
+
       {scoreFor && (
         <ScoreModal
           card={scoreFor}
@@ -399,6 +407,70 @@ export function SessionModal({ id, onClose, studentId }: { id: string; onClose: 
           }}
         />
       )}
+    </Modal>
+  );
+}
+
+
+/** Что именно сдал обучающийся: заполненная карточка с сервера */
+function CardModal({ card, onClose }: { card: CardSummary; onClose: () => void }) {
+  const [data, setData] = useState<CardDetails | null>(null);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    void getCard(card.id).then(
+      (d) => alive && setData(d),
+      (e: unknown) => alive && setErr(describeError(e, 'Не удалось загрузить работу')),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [card.id]);
+
+  const line = (label: string, value: string) => (
+    <div className="flex gap-2 border-b border-c-line py-1.5 text-[13px] last:border-0">
+      <span className="w-[190px] shrink-0 text-c-muted">{label}</span>
+      <span className="min-w-0 break-words">{value || '—'}</span>
+    </div>
+  );
+
+  const c = data?.submittedCard;
+  const a = c?.address;
+  const address = a ? [a.settlement, a.district, a.street, a.house, a.building && `к. ${a.building}`, a.entrance && `подъезд ${a.entrance}`, a.floor && `этаж ${a.floor}`, a.apartment && `кв. ${a.apartment}`].filter(Boolean).join(', ') : '';
+
+  return (
+    <Modal
+      title={`Работа: ${card.studentName ?? ''}`}
+      width={720}
+      onClose={onClose}
+      footer={
+        <Button variant="success" className="h-10 px-4 text-[15px]" onClick={onClose}>
+          закрыть
+        </Button>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        {err && <Notice tone="bad">{err}</Notice>}
+        {!data && !err && <Notice tone="neutral">Загрузка…</Notice>}
+        {c && (
+          <div className="flex flex-col">
+            {line('Сценарий', data?.scenarioTitle ?? '')}
+            {line('Заявитель', `${c.applicant.fullName} (${c.applicant.status})`)}
+            {line('Телефоны', [c.applicant.phoneAon, c.applicant.phoneProvided, c.applicant.phoneOnSite].filter(Boolean).join(', '))}
+            {line('Адрес', address)}
+            {line('Тип происшествия', c.incident.incidentType)}
+            {line('Признаки', c.incident.tags.join('; '))}
+            {line('Пострадавшие', c.incident.hasVictims ? 'есть' : 'нет')}
+            {line('Доступ закрыт', c.incident.accessDenied ? 'да' : 'нет')}
+            {line('Описание', c.incident.description)}
+            {line('Оповещены службы', c.services.assignedServices.join(', '))}
+            {line('Решение', `${c.decision.action}${c.decision.reason ? ` — ${c.decision.reason}` : ''}`)}
+            {line('Доклад руководителю', c.dispatch.dispatchNotes)}
+            {line('Время работы', data?.durationSeconds != null ? `${data.durationSeconds} с (норматив ${data.timeDeltaSeconds != null && data.timeDeltaSeconds > 0 ? `превышен на ${data.timeDeltaSeconds} с` : 'выдержан'})` : '')}
+          </div>
+        )}
+      </div>
     </Modal>
   );
 }
@@ -489,7 +561,7 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
         <>
           <Button onClick={onClose}>Отмена</Button>
           <Button disabled={busy} onClick={() => void askAi()}>
-            {evaluation?.aiScore != null ? 'Оценить ИИ заново' : 'Запросить оценку ИИ'}
+            {busy ? 'Ожидание…' : evaluation?.aiScore != null ? 'Оценить ИИ заново' : 'Запросить оценку ИИ'}
           </Button>
           <Button variant="primary" disabled={busy} onClick={() => void save()}>
             {busy ? 'Сохранение…' : 'Сохранить оценку'}

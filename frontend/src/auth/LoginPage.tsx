@@ -11,6 +11,17 @@ import { cx } from '../ui/cx';
  * Проверку пароля и блокировку выполняет бэкенд.
  */
 
+/*
+ * Временные учётные записи демонстрационного стенда — п.2 рекомендаций заказчика:
+ * «на главной интерфейсной панели прототипа отобразить временные логины и пароли по ролям».
+ * Значения совпадают с README развёрнутого стенда; при смене паролей поменять здесь.
+ */
+const DEMO_ACCOUNTS = [
+  { role: 'администратор', login: 'admin', password: 'admin123' },
+  { role: 'преподаватель', login: 'i.ivanov', password: 'teacher123' },
+  { role: 'обучающийся', login: 'v.pupkin', password: 'student1337' },
+];
+
 export function LoginPage() {
   const signIn = useSession((s) => s.signIn);
   const notice = useSession((s) => s.notice);
@@ -61,7 +72,33 @@ export function LoginPage() {
             {busy ? 'ВХОД…' : 'ВОЙТИ'}
           </button>
         </form>
-        <div className="mt-8 text-white">
+        <div className="mt-6 border border-[rgba(255,255,255,0.45)] bg-[rgba(255,255,255,0.12)] px-3 py-2.5 text-white">
+          <div className="text-[13px] tracking-wide uppercase">Временные учётные записи прототипа</div>
+          <table className="mt-1.5 w-full text-[14px]">
+            <tbody>
+              {DEMO_ACCOUNTS.map((a) => (
+                <tr key={a.login} className="align-baseline">
+                  <td className="py-0.5 pr-3 whitespace-nowrap text-[#eaf3fa]">{a.role}</td>
+                  <td className="py-0.5 pr-2 font-mono">{a.login}</td>
+                  <td className="py-0.5 pr-2 font-mono">{a.password}</td>
+                  <td className="py-0.5 text-right">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setName(a.login);
+                        setPassword(a.password);
+                      }}
+                      className="text-[12px] underline decoration-dotted underline-offset-2 hover:text-arm-orange"
+                    >
+                      подставить
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-6 text-white">
           <div className="text-[22px] leading-tight">Учебный комплекс подготовки операторов ДДС</div>
           <div className="mt-1 text-[15px] text-[#eaf3fa]">Техподдержка учебного центра: вн. 1120</div>
         </div>

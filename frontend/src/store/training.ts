@@ -9,6 +9,7 @@ import { BACKGROUND } from '../data/background';
 import { OWN_SERVICE_ID } from '../data/scenarios';
 import { serviceById } from '../data/services';
 import { deriveDemo, eventsToDemo, stepMatches } from '../domain/demo';
+import { useSoftphone } from '../training/softphoneStore';
 import { DEFAULT_NORMS, evaluateDds, type Norms } from '../domain/evaluate';
 import { computeRatings, predictSuccess, recommendDifficulty } from '../domain/skills';
 import type {
@@ -86,10 +87,24 @@ interface RunState {
   finishedAll: boolean;
   unread: number;
   inCall: boolean;
+  /** Пропущенные входящие вызовы за карточку — показываем в разборе */
+  missedCalls: number;
+  /** Звонил ли обучающийся кому-нибудь по этой карточке: бригада перезванивает только после вызова */
+  calledOut: boolean;
+  /** Доклады, которые ждут, пока обучающийся вызовет бригаду */
+  heldReports: { from: string; text: string; voice: 'male' | 'female' }[];
   /** Занятие пришло с сервера: заполненные карточки уходят на бэкенд */
   fromServer: boolean;
   /** Ошибка отправки карточки на сервер — показывается в разборе */
   sendError: string | null;
+  /**
+   * Сколько времени карточка простояла на паузе. Пока сервер распознаёт доклад, обучающийся
+   * ничего сделать не может, и это время не его: оно не идёт ни в таймер, ни в норматив.
+   */
+  pausedMs: number;
+  pausedAt: number | null;
+  /** Включить и выключить паузу (распознавание речи) */
+  pauseClock: (on: boolean) => void;
 
   start: (p: {
     user: User;
@@ -108,6 +123,8 @@ interface RunState {
   callStarted: (contactId: string) => void;
   callEnded: (contactId: string, transcript: string, reply?: { from: string; text: string }) => void;
   requestHint: () => void;
+  incomingAnswered: (from: string, text: string) => void;
+  incomingMissed: (from: string, text: string) => void;
   finishCard: () => void;
   nextCard: () => void;
   exit: () => void;
@@ -207,8 +224,13 @@ const initial = {
   finishedAll: false,
   unread: 0,
   inCall: false,
+  missedCalls: 0,
+  calledOut: false,
+  heldReports: [],
   fromServer: false,
   sendError: null,
+  pausedMs: 0,
+  pausedAt: null,
 };
 
 export const useRun = create<RunState>((set, get) => {
@@ -310,6 +332,8 @@ export const useRun = create<RunState>((set, get) => {
       journal: [incident, ...context, ...s.journal],
       current: { scenario, incidentId, attemptId: newId('a'), arrivedAt: now, predicted },
       events: [{ t: 0, kind: 'arrived' }],
+      pausedMs: 0,
+      pausedAt: null,
       inputs: [],
       manualHints: [],
       demo: s.mode === 'demo' ? scenario.demo ?? deriveDemo(scenario) : [],
@@ -390,6 +414,23 @@ export const useRun = create<RunState>((set, get) => {
         later(() => {
           const cur = get();
           if (!cur.current || cur.current.incidentId !== incidentId || cur.current.finishedAt) return;
+          // доклад бригады приходит звонком, но только если её вызвали: пока обучающийся
+          // никому не звонил, бригада не выехала и докладывать ей не о чем
+          if (input.via === 'call') {
+            const report = { from: input.from, text: input.text, voice: input.voice ?? 'male' };
+            if (!cur.calledOut) {
+              const first = !cur.heldReports.length;
+              set({
+                heldReports: [...cur.heldReports, report],
+                inputs: first ? [...cur.inputs, { at: Date.now(), from: 'Диспетчерская', text: 'Бригада не выезжала: вызов ей не передавали. Позвоните мастеру участка или в аварийную службу.' }] : cur.inputs,
+              });
+              if (first) blip();
+              return;
+            }
+            useSoftphone.getState().enqueue(report);
+            push({ kind: 'call_incoming', text: input.text });
+            return;
+          }
           set({ inputs: [...cur.inputs, { at: Date.now(), from: input.from, text: input.text }] });
           push({ kind: 'input_received', text: input.text });
           blip();
@@ -404,7 +445,19 @@ export const useRun = create<RunState>((set, get) => {
     },
 
     callEnded: (contactId, transcript, reply) => {
-      set({ inCall: false });
+      set({ inCall: false, calledOut: true });
+      // бригаду вызвали — доклады, которые ждали вызова, пойдут один за другим
+      const held = get().heldReports;
+      if (held.length) {
+        set({ heldReports: [] });
+        held.forEach((r, i) =>
+          later(() => {
+            if (!get().current || get().current?.finishedAt) return;
+            useSoftphone.getState().enqueue(r);
+            push({ kind: 'call_incoming', text: r.text });
+          }, 6000 + i * 12000),
+        );
+      }
       // ответ собеседника остаётся в «Вводных»: в нём часто ключевая информация для решения
       if (reply && get().current) set({ inputs: [...get().inputs, { at: Date.now(), from: `${reply.from} (по телефону)`, text: reply.text }] });
       push({ kind: 'call_ended', contactId, transcript });
@@ -418,12 +471,31 @@ export const useRun = create<RunState>((set, get) => {
       push({ kind: 'hint', text });
     },
 
+    /** Диспетчер снял трубку и выслушал доклад */
+    incomingAnswered: (from, text) => {
+      const s = get();
+      if (!s.current || s.current.finishedAt) return;
+      set({ inputs: [...s.inputs, { at: Date.now(), from, text }] });
+      push({ kind: 'input_received', text });
+    },
+
+    /** Трубку не сняли: доклад всё равно виден в «Вводных», но вызов отмечен пропущенным */
+    incomingMissed: (from, text) => {
+      const s = get();
+      if (!s.current || s.current.finishedAt) return;
+      set({ inputs: [...s.inputs, { at: Date.now(), from: `${from} (пропущенный вызов)`, text }], missedCalls: s.missedCalls + 1 });
+      push({ kind: 'call_missed', text });
+      blip();
+    },
+
     finishCard: () => {
       const s = get();
       if (!s.current || s.current.finishedAt || !s.user) return;
       push({ kind: 'finished' });
       const events = get().events;
       const cur = { ...s.current, finishedAt: Date.now() };
+      // пауза на распознавание речи — не время обучающегося
+      const paused = s.pausedMs + (s.pausedAt === null ? 0 : Date.now() - s.pausedAt);
       clearTimers();
 
       if (s.kind === 'record') {
@@ -442,6 +514,7 @@ export const useRun = create<RunState>((set, get) => {
         cur.predicted,
         (skill) => pickNext(s.user!, skill, s.service.kind, cur.scenario.id),
         chiefIds,
+        paused,
       );
       saveAttempt({
         id: cur.attemptId,
@@ -467,7 +540,7 @@ export const useRun = create<RunState>((set, get) => {
             .map((e) => e.transcript ?? '')
             .filter(Boolean)
             .join(' ');
-          const durationSeconds = Math.round((cur.finishedAt - cur.arrivedAt) / 1000);
+          const durationSeconds = Math.round((cur.finishedAt - cur.arrivedAt - paused) / 1000);
           void submitCard({
             sessionId: s.sessionId,
             scenarioId: cur.scenario.id,
@@ -512,7 +585,7 @@ export const useRun = create<RunState>((set, get) => {
         if (s.user) clearLive(s.user.id);
         return;
       }
-      set({ result: null, index, current: null, events: [], inputs: [], manualHints: [], demo: [], demoStep: 0 });
+      set({ result: null, index, current: null, events: [], inputs: [], manualHints: [], demo: [], demoStep: 0, missedCalls: 0, calledOut: false, heldReports: [] });
       later(arrive, 3000);
     },
 
@@ -521,6 +594,15 @@ export const useRun = create<RunState>((set, get) => {
       const u = get().user;
       if (u) clearLive(u.id);
       set({ ...initial });
+    },
+
+    pauseClock: (on) => {
+      const s = get();
+      if (on) {
+        if (s.pausedAt === null) set({ pausedAt: Date.now() });
+        return;
+      }
+      if (s.pausedAt !== null) set({ pausedMs: s.pausedMs + (Date.now() - s.pausedAt), pausedAt: null });
     },
 
     markRead: () => set({ unread: 0 }),

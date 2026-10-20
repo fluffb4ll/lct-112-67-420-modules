@@ -108,8 +108,8 @@ const STATUS_FROM_BACKEND: Record<BackendStatus, Scenario['status']> = { DRAFT: 
 export const toBackendStatus = (s: Scenario['status']) => STATUS_TO_BACKEND[s];
 export const fromBackendStatus = (s: BackendStatus) => STATUS_FROM_BACKEND[s];
 
-/** Норматив на карточку: до появления поля в модели сценария — общий по памятке */
-const DEFAULT_TIME_LIMIT = 180;
+/** Норматив на карточку по умолчанию (Памятка): преподаватель может задать свой */
+export const DEFAULT_TIME_LIMIT = 180;
 
 /** Пол заявителя по отчеству: бэкенд требует это поле в callerProfile */
 function genderOf(name: string): 'female' | 'male' | 'unknown' {
@@ -134,7 +134,7 @@ export function toBody(sc: Scenario, categoryId: number | null): ScenarioBody {
     categoryId,
     title: sc.title,
     complexity: COMPLEXITY[sc.difficulty],
-    timeLimitSeconds: DEFAULT_TIME_LIMIT,
+    timeLimitSeconds: sc.timeLimitSec && sc.timeLimitSec > 0 ? Math.round(sc.timeLimitSec) : DEFAULT_TIME_LIMIT,
     // текст для ИИ-заявителя: первая запись описания, иначе название
     prompt: incident.descriptions[0]?.text?.trim() || sc.title,
     // gender и emotional_state обязательны — бэкенд проверяет их наличие
@@ -169,6 +169,7 @@ export function fromDetails(d: ScenarioDetails): Scenario {
     id: d.id,
     title: d.title,
     difficulty: DIFFICULTY[d.complexity] ?? 1,
+    timeLimitSec: d.timeLimitSeconds ?? base.timeLimitSec ?? DEFAULT_TIME_LIMIT,
     status: fromBackendStatus(d.status),
     category: d.categoryName ?? base.category ?? '',
     createdAt: d.createdAt,

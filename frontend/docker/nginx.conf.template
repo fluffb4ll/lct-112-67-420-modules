@@ -91,13 +91,25 @@ server {
             proxy_pass $ai;
         }
 
-        # языковая модель переписывает текст сценария — самое тяжёлое (фронт ждёт 90 с)
+        # реплика абонента в учебном телефоне: модель отвечает на доклад (фронт ждёт 10 с)
+        location = /ai/v1/dialogue/reply {
+            limit_req zone=ai_addr burst=100 nodelay;
+            limit_req zone=ai_voice burst=10 nodelay;
+            proxy_read_timeout 15s;
+            set $ai "${AI_URL}";
+            rewrite ^/ai/(.*)$ /$1 break;
+            proxy_pass $ai;
+        }
+
+        # языковая модель переписывает текст сценария — самое тяжёлое. Контур кладёт на одну
+        # карточку до трёх минут (ai/.../bridge/compose.py), фронт ждёт 200 с, здесь столько же:
+        # срезать ответ после того, как модель его уже написала, — худшее из возможного
         location = /ai/v1/scenarios/compose {
             limit_req zone=ai_addr burst=100 nodelay;
             # пачка из ScenarioBank — до 6 сценариев подряд — проходит целиком, и вторая следом тоже
             limit_req zone=ai_compose burst=12 nodelay;
             limit_req zone=ai_compose_addr burst=30 nodelay;
-            proxy_read_timeout 120s;
+            proxy_read_timeout 200s;
             set $ai "${AI_URL}";
             rewrite ^/ai/(.*)$ /$1 break;
             proxy_pass $ai;

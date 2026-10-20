@@ -1,7 +1,7 @@
 import { DIRECTORY } from '../data/services';
 import { COMMENT_REQUIRED } from '../domain/statusMachine';
 import { literacyIssues, matchGroups } from '../domain/text';
-import type { ResponseStatus, Scenario, SoftphoneContact, TrainingEvent, TrainingMode } from '../domain/types';
+import type { ResponseStatus, Scenario, ScenarioPhone, SoftphoneContact, TrainingEvent, TrainingMode } from '../domain/types';
 
 /*
  * Мок ИИ-модуля. На сервере эти ответы формирует локальная LLM (руководитель смены, подсказки,
@@ -17,7 +17,18 @@ export interface CallPeer {
   contactId: string;
 }
 
-export function resolvePeer(number: string, contacts: SoftphoneContact[]): CallPeer | null {
+export function resolvePeer(number: string, contacts: SoftphoneContact[], phones: ScenarioPhone[] = []): CallPeer | null {
+  // номера, которые завёл преподаватель, старше штатных: он мог задать и своё приветствие
+  const own = phones.find((p) => p.number === number);
+  if (own) {
+    return {
+      title: own.title,
+      voice: own.voice,
+      isChief: !!own.isChief,
+      contactId: `sc:${own.number}`,
+      greeting: own.reply?.trim() || `${own.title}, слушаю.`,
+    };
+  }
   const c = contacts.find((x) => x.number === number);
   if (c) {
     const surname = c.name.split(' ')[0];
@@ -28,19 +39,54 @@ export function resolvePeer(number: string, contacts: SoftphoneContact[]): CallP
   return null;
 }
 
-/** Ответ собеседника на доклад обучающегося */
-export function peerReply(peer: CallPeer, number: string, transcript: string, scenario: Scenario | null): string {
+/*
+ * Ответ собеседника на доклад обучающегося.
+ * Пока ИИ-контур не отдаёт наружу диалог, ответ собирается здесь по роли абонента и по тому,
+ * что прозвучало в докладе: адрес, суть происшествия, пострадавшие, повтор уже сказанного.
+ */
+export function peerReply(peer: CallPeer, _number: string, transcript: string, scenario: Scenario | null, said: string[] = []): string {
   const text = transcript.trim();
-  if (!text) return 'Вас не слышно. Перезвоните. Конец связи.';
-  if (peer.isChief) {
-    if (!scenario) return 'Вас понял. Работайте по карточке. Конец связи.';
-    const addressGroup = scenario.expected.reportMustMention[0];
-    const noAddress = addressGroup && matchGroups(text, [addressGroup], { fuzzy: true }).missing.length > 0;
-    return (noAddress ? 'Адрес не назвали — в следующий раз начинайте с адреса. ' : '') + scenario.chiefReply;
+  if (!text) return 'Алло, вас не слышно. Перезвоните, пожалуйста.';
+
+  const low = text.toLowerCase();
+  const repeat = said.some((prev) => prev.trim().toLowerCase() === low);
+  const hasAddress = scenario ? matchGroups(text, [scenario.expected.reportMustMention[0] ?? []], { fuzzy: true }).missing.length === 0 : /\d/.test(text);
+  const hasVictims = /пострадав|человек|ребён|ребен|застря|зажат|задым/i.test(text);
+  const short = text.split(/\s+/).filter(Boolean).length < 4;
+
+  if (repeat) return peer.isChief ? 'Это вы мне уже докладывали. Работайте по карточке, о результате доложите отдельно.' : 'Так вы это уже передавали. Мы приняли, работаем.';
+
+  // адрес назван, но не тот: собеседник должен сказать именно это, а не просить назвать адрес
+  const wrongAddress = !hasAddress && (/\d/.test(text) || /улиц|\bул\b|проспект|переул|шоссе|бульвар|проезд|набережн/i.test(text));
+  const cardAddress = scenario ? `${scenario.incident.address.street}, ${scenario.incident.address.house}` : '';
+
+  // Сторонняя организация (номер из справочника): заявку принимает, но докладывать нам не будет —
+  // происшествие уходит из нашей зоны вместе с карточкой
+  if (peer.contactId.startsWith('dir:')) {
+    if (short) return 'Говорите по существу: адрес и что произошло.';
+    if (!hasAddress) return 'Адрес повторите, я записываю.';
+    return 'Информацию принял, заявку зарегистрировали. Дальше это наша зона, работаем сами.';
   }
-  const d = DIRECTORY.find((x) => x.number === number);
-  if (d) return d.reply.split('.').slice(1).join('.').trim() || 'Принято. Конец связи.';
-  return 'Вас понял, передам. Конец связи.';
+
+  /*
+   * Руководитель смены и его заместитель. Замечание по докладу он делает, но указание даёт в
+   * любом случае: в нём ключ к задаче, и без него обучающийся упирается в тупик.
+   */
+  if (peer.isChief) {
+    if (short) return 'Докладывайте подробнее: адрес, что случилось, есть ли пострадавшие.';
+    const order = scenario?.chiefReply?.trim() || 'Принимайте карточку и направляйте бригаду. О выполнении доложите.';
+    if (wrongAddress && cardAddress) return `Адрес не сходится: у меня в карточке ${cardAddress}. ${order}`;
+    if (!hasAddress) return `Адрес вы не назвали — начинайте доклад с него. ${order}`;
+    return (hasVictims ? 'Понял, люди на месте — это в первую очередь. ' : 'Понял вас. ') + order;
+  }
+
+  // Мастер участка и аварийная служба: принимают заявку и говорят, что будут делать
+  const isEmergency = /аварийн|бригад|дежурн/i.test(peer.title);
+  if (short) return isEmergency ? 'Не понял, повторите: адрес и что произошло.' : 'Поподробнее, пожалуйста: куда ехать и что там?';
+  if (wrongAddress && cardAddress) return `Такой заявки у нас нет. В карточке ${cardAddress} — вы по ней звоните?`;
+  if (!hasAddress) return isEmergency ? 'Адрес уточните, по нему и выезжаем.' : 'Адрес не расслышал, назовите ещё раз.';
+  if (hasVictims) return isEmergency ? 'Принял, люди внутри — выезжаем немедленно, о прибытии доложу.' : 'Принял, раз там люди — отправляю бригаду сейчас же, доложу с места.';
+  return isEmergency ? 'Заявку принял, бригада выезжает. Как прибудем — доложу.' : 'Принял, направляю рабочих. О ходе работ сообщу.';
 }
 
 export interface Hint {
@@ -82,7 +128,24 @@ export function liveHints(p: {
     }
   }
   if (p.elapsedSec >= p.normTotalSec - 30 && p.elapsedSec < p.normTotalSec) {
-    hints.push({ id: 'total', tone: 'warn', text: 'До конца норматива отработки (3 минуты) осталось меньше 30 секунд.' });
+    hints.push({
+      id: 'total',
+      tone: 'warn',
+      text: `До конца норматива отработки (${Math.round(p.normTotalSec / 60)} мин) осталось меньше 30 секунд.`,
+    });
+  }
+  /*
+   * «Не принята» карточку не закрывает: служба вправе передумать, поэтому следующим статусом
+   * остаётся «Принята». Без подсказки это тупик — обучающийся ждёт разбора, а его нет, пока
+   * карточку не завершили вручную. Подсказка говорит, как закончить, а не верен ли отказ.
+   */
+  const last = sets[sets.length - 1];
+  if (last?.status === 'Не принята') {
+    hints.push({
+      id: 'finish-after-refusal',
+      tone: 'info',
+      text: 'Отказ проставлен. Дальше служба ничего не делает: когда закончите, нажмите «завершить карточку» в учебной полосе.',
+    });
   }
   return hints;
 }

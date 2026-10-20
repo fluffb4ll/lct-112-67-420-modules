@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import time
 import re
 from typing import Any
 
@@ -43,7 +44,21 @@ COMPOSE_SCHEMA = {
     "additionalProperties": False,
 }
 
-COMPOSE_TIMEOUT_S = 50.0
+# Сроки и длина ответа. Адаптер llama.cpp по тайм-ауту выбрасывает всё, что успел написать,
+# поэтому «не успела» равно «не ответила»: в сценарии остаётся заготовка. На процессоре стенда
+# 1,5-миллиардная модель выдаёт около десяти токенов в секунду — отсюда и срок, и потолок.
+COMPOSE_TIMEOUT_S = 110.0
+MAX_COMPOSE_TOKENS = 560
+# Если с первого раза не вышло ни названия, ни описания, просим ещё раз — короче и быстрее
+RETRY_TIMEOUT_S = 50.0
+RETRY_TOKENS = 380
+RETRY_HINT = (
+    "\nПредыдущий ответ не подошёл: он не выполнил требования выше. "
+    "Напиши заново, короче и строго по требованиям. Ответь только JSON."
+)
+# Общий срок на карточку: дольше ждёт уже не фронт, а nginx (200 с), и ответ пропадёт зря
+BUDGET_S = 180.0
+MIN_SLICE_S = 20.0
 
 COMPLICATION_HINTS = {
     "zone": "дом обслуживает другая организация — служба ДДС реагировать не должна",
@@ -222,6 +237,10 @@ def _same(text: str, draft_text: Any) -> bool:
     return _words(text) == _words(str(draft_text or ""))
 
 
+def _digits(text: str) -> set[str]:
+    return set(re.findall(r"\d+", text))
+
+
 def _check_shape(draft: dict[str, Any]) -> None:
     inc = draft.get("incident")
     if not isinstance(inc, dict):
@@ -248,16 +267,25 @@ def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str,
         scenario["expected"] = {}
     exp = scenario["expected"]
 
-    out = ask_json(
-        llm,
-        _prompt(draft, complication, difficulty),
-        schema=COMPOSE_SCHEMA,
-        max_tokens=700,
-        timeout_s=COMPOSE_TIMEOUT_S,
-    )
+    prompt = _prompt(draft, complication, difficulty)
     applied: list[str] = []
     rejected: list[str] = []
-    if out is not None:
+    started = time.monotonic()
+    # вторая попытка — только если модель не дала ни названия, ни описания: ради них
+    # генерацию и запускают, а всё остальное переживёт и текст заготовки
+    for attempt in range(2 if llm is not None else 1):
+        left = BUDGET_S - (time.monotonic() - started)
+        if attempt and (left < MIN_SLICE_S or {"title", "description"} & set(applied)):
+            break
+        out = ask_json(
+            llm,
+            prompt if attempt == 0 else prompt + RETRY_HINT,
+            schema=COMPOSE_SCHEMA,
+            max_tokens=MAX_COMPOSE_TOKENS if attempt == 0 else RETRY_TOKENS,
+            timeout_s=min(COMPOSE_TIMEOUT_S if attempt == 0 else RETRY_TIMEOUT_S, left),
+        )
+        if out is None:
+            continue
         address = _address(draft)
 
         def reject(field: str, reason: str) -> None:
@@ -297,6 +325,8 @@ def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str,
         )
         if chief and _same(chief, draft.get("chiefReply")):
             log.info("compose: поле chiefReply не применено — совпадает с черновиком")
+        elif chief and _digits(chief) - _digits(f"{draft.get('chiefReply', '')} {address}"):
+            reject("chiefReply", "номер, которого нет в черновике")
         elif chief and (not org or not match_groups(chief, [org])[1]):
             scenario["chiefReply"] = chief
             applied.append("chiefReply")
@@ -323,6 +353,8 @@ def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str,
                 item["text"] = text
             applied.append("inputs")
 
+    applied = list(dict.fromkeys(applied))
+    rejected = list(dict.fromkeys(rejected))
     if applied:
         note = (
             "Текст сценария написан языковой моделью; "

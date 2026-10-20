@@ -88,6 +88,7 @@ export function ArmRun({ incidentId, homePath }: { incidentId?: string; homePath
               serviceId={run.service.id}
               phoneLabel={phoneLabel(sp.phase, sp.connectedAt, now)}
               inCall={sp.phase === 'connected' || sp.phase === 'reply' || sp.phase === 'ringing'}
+              incomingFrom={sp.incoming?.from}
               onPhone={() => sp.setOpen(!sp.open)}
               onClose={() => {
                 run.closeIncident();

@@ -5,6 +5,7 @@ import { useNow } from '../../app/hooks';
 import { dateTime } from '../../domain/format';
 import { useMe } from '../../store/session';
 import { Badge, Button, ConfirmModal, Input, Notice, Panel, Select, Stat, Table } from '../../ui';
+import { ServerIncidents } from './ServerIncidents';
 
 /*
  * Техническое администрирование: состояние компонентов, нагрузка, запуск/остановка сервисов,
@@ -13,6 +14,9 @@ import { Badge, Button, ConfirmModal, Input, Notice, Panel, Select, Stat, Table 
  */
 
 const CORE = new Set(['api', 'db', 'ws', 'voip']);
+
+/** Показывать ли панели на демонстрационных данных (состояние сервисов, копии, настройки) */
+const DEMO_PANELS = false;
 
 const uptime = (sec: number) => {
   const d = Math.floor(sec / 86400);
@@ -38,7 +42,10 @@ export function System() {
   return (
     <div className="flex flex-col gap-4">
       {msg && <Notice tone="ok">{msg}</Notice>}
-      {allowed(user, 'system.monitoring') && (
+      <ServerIncidents />
+      {/* Блоки ниже работают на демонстрационных данных: сервер их не отдаёт. На показе скрыты,
+          чтобы в кабинете не было неработающих кнопок (п.6 рекомендаций). Вернуть — DEMO_PANELS = true. */}
+      {DEMO_PANELS && allowed(user, 'system.monitoring') && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Stat label="Загрузка ЦП сервера" value={`${cpu}%`} sub="8 ядер" tone={cpu > 80 ? 'bad' : undefined} />
           <Stat label="Оперативная память" value={`${ram} ГБ`} sub="из 32 ГБ" />
@@ -72,7 +79,7 @@ export function System() {
                   </td>
                   <td className="text-[13px] text-c-muted">{s.status === 'stopped' ? '—' : uptime(s.uptimeSec)}</td>
                   <td>
-                    {allowed(user, 'system.services') && (
+                    {DEMO_PANELS && allowed(user, 'system.services') && (
                       <div className="flex justify-end gap-1.5">
                         {s.status !== 'stopped' ? (
                           <>
@@ -99,7 +106,7 @@ export function System() {
       </Panel>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        {allowed(user, 'system.backup') && (
+        {DEMO_PANELS && allowed(user, 'system.backup') && (
           <Panel
             title="Резервное копирование"
             actions={
@@ -132,7 +139,7 @@ export function System() {
           </Panel>
         )}
 
-        {allowed(user, 'system.config') && (
+        {DEMO_PANELS && allowed(user, 'system.config') && (
           <Panel title="IP-телефония и журналирование">
             <div className="grid gap-3 sm:grid-cols-2">
               <Select label="Кодек голоса" value={cfg.voipCodec} onChange={(e) => setCfg({ ...cfg, voipCodec: e.target.value as SystemConfig['voipCodec'] })}>

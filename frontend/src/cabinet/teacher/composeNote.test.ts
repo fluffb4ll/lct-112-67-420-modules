@@ -51,7 +51,8 @@ describe('composeAndSave', () => {
       ['c', 'generated'],
       ['d', 'generated'],
     ]);
-    expect(o).toEqual({ saved: 4, failed: 0, byTemplate: 1, stoppedByLimit: false });
+    // причина отказа запоминается по первой карточке и попадает в сообщение преподавателю
+    expect(o).toEqual({ saved: 4, failed: 0, byTemplate: 1, stoppedByLimit: false, why: 'нет связи' });
   });
 });
 

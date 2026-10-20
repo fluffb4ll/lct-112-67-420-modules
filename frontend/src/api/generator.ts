@@ -1,6 +1,7 @@
 import type { Address, Scenario, ServiceNotification, Skill } from '../domain/types';
 import { OWN_SERVICE_ID } from '../data/scenarios';
 import { newId } from './db';
+import { DEFAULT_TIME_LIMIT } from './scenarios';
 
 /*
  * Генерация сценариев «нейросетью» — мок. На сервере это LLM с промптом из классификатора,
@@ -66,6 +67,28 @@ const STREETS: [string, string, string[]][] = [
 
 const NAMES = ['Громова Лидия', 'Ефимов Антон', 'Жукова Вера', 'Климов Сергей', 'Лапина Ольга', 'Никонов Павел', 'Осипова Инна', 'Руденко Марк'];
 
+/*
+ * Чужие управляющие организации для сценариев «дом не в нашей зоне». Номера те же, что в
+ * справочнике учебного телефона (`data/services.ts`), иначе передавать информацию будет некуда.
+ * `stem` — корень, который проверяется в комментарии обучающегося.
+ */
+const FOREIGN_UK = [
+  { name: 'УК «Домовой»', stem: 'домов', number: '2255' },
+  { name: 'УК «ПИК-Комфорт»', stem: 'пик', number: '2260' },
+  { name: 'ООО «Практика»', stem: 'практик', number: '2250' },
+];
+
+/*
+ * Чей объект оказался на месте в сценариях «отказ после осмотра». `stem` — корень, который
+ * проверяется в комментарии обучающегося, `who` — кому он передаёт информацию.
+ */
+const SITE_OWNERS = [
+  { where: 'объект на территории стройплощадки', name: 'ООО «СтройИнвест»', stems: ['стройинвест', 'застройщик'], who: 'застройщику' },
+  { where: 'колодец в зоне ответственности', name: 'АО «Мосводоканал»', stems: ['водоканал'], who: 'в Мосводоканал' },
+  { where: 'опора принадлежит', name: 'ПАО «Россети Московский регион»', stems: ['россет', 'сетев'], who: 'в сетевую компанию' },
+  { where: 'участок закреплён за', name: 'ГБУ «Автомобильные дороги»', stems: ['автомобильные дороги', 'автодорог'], who: 'в Автодороги' },
+];
+
 const pick = <T,>(arr: T[], r: () => number) => arr[Math.floor(r() * arr.length)];
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -108,21 +131,35 @@ export function generateScenarios(c: Classifier, p: GenerateParams): Scenario[] 
       sampleReport: `Докладываю: ${houseLabel} — ${t.t.toLowerCase()}. Направляю мастера участка.`,
       explanation: '',
     };
-    let chiefReply = 'Принимайте, мастера на место. Конец связи.';
+    // Ответ руководителя обучающийся слышит один раз и по телефону — он должен быть понятен
+    // сразу, без телеграфного «принимайте, мастера на место»
+    let chiefReply = pick(
+      [
+        'Принято. Карточку берите в работу, мастера участка направляйте на адрес. Конец связи.',
+        'Вас понял. Отрабатывайте сами: принимайте карточку и высылайте мастера участка. Конец связи.',
+        'Понял вас. Принимайте и направляйте мастера на место, по готовности доложите. Конец связи.',
+      ],
+      r,
+    );
     let inputs: Scenario['inputs'] = [];
     let journalContext: Scenario['journalContext'];
 
     if (comp === 'zone') {
       skills.splice(0, 1, 'zone', 'refusal_comment');
+      // чужая организация у каждого сценария своя: иначе обучающийся запоминает не признак
+      // «дом не наш», а слово «Домовой» — и ищет его вместо того, чтобы выяснять
+      const uk = pick(FOREIGN_UK, r);
       expected = {
         ...expected,
         path: ['Не принята'],
-        sample: { 'Не принята': 'Не обслуживаем: дом в управлении УК «Домовой». Информация передана в диспетчерскую УК «Домовой».' },
-        commentMustMention: [['домов'], ['передан', 'сообщ', 'проинформ']],
+        sample: { 'Не принята': `Не обслуживаем: дом в управлении ${uk.name}. Информация передана в диспетчерскую ${uk.name}.` },
+        commentMustMention: [[uk.stem], ['передан', 'сообщ', 'проинформ']],
         callRequired: true,
         sampleReport: `Докладываю: ${houseLabel} — ${t.t.toLowerCase()}. Уточняю, обслуживаем ли дом.`,
       };
-      chiefReply = `${houseLabel} — дом УК «Домовой», не наш. Передайте в их диспетчерскую и отработайте карточку с комментарием. Конец связи.`;
+      // номер диспетчерской называем вслух: без него передавать информацию некуда,
+      // а эталон требует указать в комментарии, что она передана
+      chiefReply = `${houseLabel} — дом ${uk.name}, не наш. Позвоните в их диспетчерскую, номер ${uk.number}, передайте информацию и отработайте карточку с комментарием. Конец связи.`;
     } else if (comp === 'duplicate') {
       skills.splice(0, 1, 'duplicate', 'refusal_comment');
       journalContext = [
@@ -157,13 +194,28 @@ export function generateScenarios(c: Classifier, p: GenerateParams): Scenario[] 
       chiefReply = 'По этому адресу уже работаем по предыдущей карточке. Эту — как дубль. Конец связи.';
     } else if (comp === 'refusal') {
       skills.splice(0, 1, 'refusal_comment', 'work_progress');
+      // владелец площадки у каждого сценария свой: иначе обучающийся ждёт слово «СтройИнвест»,
+      // а не сам факт, что объект оказался чужим
+      const site = pick(SITE_OWNERS, r);
       expected = {
         ...expected,
         path: ['Принята', 'Отказ от выполнения работ'],
-        sample: { Принята: 'Принято, мастер направлен на осмотр.', 'Отказ от выполнения работ': 'Отказ от выполнения работ: объект на территории стройплощадки ООО «СтройИнвест». Информация передана застройщику.' },
-        commentMustMention: [['стройинвест', 'застройщик'], ['передан', 'сообщ']],
+        sample: {
+          Принята: 'Принято, мастер направлен на осмотр.',
+          'Отказ от выполнения работ': `Отказ от выполнения работ: ${site.where} ${site.name}. Информация передана ${site.who}.`,
+        },
+        commentMustMention: [site.stems, ['передан', 'сообщ']],
       };
-      inputs = [{ afterStatus: 'Принята', delaySec: 12, from: 'Мастер участка', text: 'Осмотрел: это территория стройплощадки ООО «СтройИнвест», не наша. Работы проводить не будем.' }];
+      inputs = [
+        {
+          afterStatus: 'Принята',
+          delaySec: 12,
+          from: 'Мастер участка',
+          text: `Осмотрел: ${site.where} ${site.name}, объект не наш. Работы проводить не будем.`,
+          via: 'call',
+          voice: 'male',
+        },
+      ];
     } else if (comp === 'progress') {
       skills.splice(0, 1, 'work_progress', 'report');
       expected = {
@@ -179,14 +231,23 @@ export function generateScenarios(c: Classifier, p: GenerateParams): Scenario[] 
         callRequired: true,
       };
       inputs = [
-        { afterStatus: 'Принята', delaySec: 10, from: 'Мастер участка', text: 'Бригада выехала.' },
-        { afterStatus: 'Начало реагирования', delaySec: 10, from: 'Мастер участка', text: 'Бригада на месте, приступили.' },
-        { afterStatus: 'Прибытие', delaySec: 14, from: 'Мастер участка', text: 'Работы выполнены, последствия устранены.' },
+        { afterStatus: 'Принята', delaySec: 10, from: 'Мастер участка', text: 'Бригада выехала.', via: 'call', voice: 'male' },
+        { afterStatus: 'Начало реагирования', delaySec: 10, from: 'Мастер участка', text: 'Бригада на месте, приступили.', via: 'call', voice: 'male' },
+        { afterStatus: 'Прибытие', delaySec: 14, from: 'Мастер участка', text: 'Работы выполнены, последствия устранены.', via: 'call', voice: 'male' },
       ];
     }
     if (p.difficulty >= 2 && comp === 'none') description += ' Заявитель взволнован, адрес называет не сразу.';
 
     expected.explanation = `Сгенерировано по классификатору: тип «${t.t}» (группа «${t.g}»), осложнение — «${COMPLICATION_LABELS[comp].toLowerCase()}». Проверьте эталон перед утверждением.`;
+
+    /*
+     * Норматив отработки считаем от самого сценария. Доклады о ходе работ приходят с
+     * задержкой и приходят звонком: диспетчер ждёт вызова, снимает трубку и слушает — это
+     * время он потратить обязан, и штрафовать за него нельзя. Поэтому к базовому нормативу
+     * добавляется вынужденное ожидание: задержка доклада плюс сам разговор.
+     */
+    const waiting = inputs.reduce((s, i) => s + i.delaySec + (i.via === 'call' ? 25 : 5), 0);
+    const timeLimitSec = Math.ceil((DEFAULT_TIME_LIMIT + waiting) / 10) * 10;
 
     out.push({
       id: newId('sc'),
@@ -200,6 +261,7 @@ export function generateScenarios(c: Classifier, p: GenerateParams): Scenario[] 
       category: t.g,
       status: 'draft',
       origin: 'generated',
+      timeLimitSec,
       authorId: p.authorId,
       createdAt: new Date().toISOString(),
       incident: {

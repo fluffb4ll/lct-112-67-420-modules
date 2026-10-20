@@ -108,6 +108,27 @@ def test_spoiler_with_punctuation_is_caught():
     assert "description" in out["rejected"]
 
 
+def test_chief_reply_with_an_invented_number_is_rejected():
+    """По номеру из ответа руководителя обучающийся звонит — выдуманный уведёт его в никуда."""
+    out = compose_scenario(
+        {"scenario": draft(), "complication": "zone"},
+        answer(chief_reply="Дом УК «Домовой», не наш. Звоните им на 2299, передайте. Конец связи."),
+    )
+    assert "chiefReply" in out["rejected"]
+    assert out["scenario"]["chiefReply"] == draft()["chiefReply"]
+
+
+def test_second_attempt_when_the_first_answer_is_unusable():
+    """Негодный ответ про текст — просим его ещё раз: иначе в сценарии остался бы шаблон."""
+    usable = answer()
+    first = [json.dumps({"title": "", "description": ""})]
+    llm = FakeLLM(lambda p: first.pop(0) if first else usable.answer(p))
+    out = compose_scenario({"scenario": draft(), "complication": "zone"}, llm)
+    assert len(llm.prompts) == 2
+    assert out["by"] == "llm"
+    assert out["scenario"]["incident"]["descriptions"][0]["text"].startswith("Женщина застряла")
+
+
 @pytest.mark.parametrize(
     "broken",
     [

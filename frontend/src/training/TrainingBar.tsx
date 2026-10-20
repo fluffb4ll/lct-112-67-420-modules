@@ -56,13 +56,30 @@ export function TrainingBar({
   const end = cur?.finishedAt ?? now;
   const opened = run.events.find((e) => e.kind === 'opened');
   const openSec = cur ? (opened ? opened.t : end - cur.arrivedAt) / 1000 : 0;
-  const totalSec = cur ? (end - cur.arrivedAt) / 1000 : 0;
+  // пока сервер распознаёт доклад, обучающийся ничего не может сделать — таймер стоит
+  const paused = run.pausedMs + (run.pausedAt === null ? 0 : now - run.pausedAt);
+  const totalSec = cur ? Math.max(0, end - cur.arrivedAt - paused) / 1000 : 0;
   const isRecord = run.kind === 'record';
   const active = !!cur && !cur.finishedAt;
   // завершить можно только открытую карточку — иначе оценивать нечего
   const canFinish = active && !!opened;
   // итоговый статус карточку не закрывает — подсказываем, что дальше доклад и кнопка завершения
   const finalSet = canFinish && !isRecord && run.events.some((e) => e.kind === 'status_set' && !!e.status && TERMINAL.includes(e.status));
+
+  /*
+   * В настоящем АРМ-112 кнопки «завершить карточку» нет: диспетчер закрывает своё участие
+   * статусом, а карточка живёт дальше. У нас она означает «сдаю работу», поэтому к ней нужно
+   * подвести — иначе обучающийся сидит на отработанной карточке и ждёт разбора, которого не
+   * будет. Но подсказать не вовремя хуже, чем не подсказать: сдача по ходу работ стоит баллов.
+   * Поэтому зовём сдавать только там, где руками и правда больше нечего делать: после «Не
+   * принята» и после «Принята» в сценарии без вводных. Случай с итоговым статусом ведёт
+   * `finalSet` выше — его карточка тоже ждёт, пока работу сдадут руками.
+   */
+  const scenario = cur?.scenario;
+  const lastStatus = [...run.events].reverse().find((e) => e.kind === 'status_set')?.status;
+  const reported = !scenario?.expected.callRequired || run.events.some((e) => e.kind === 'call_ended');
+  const done = lastStatus === 'Не принята' || (lastStatus === 'Принята' && !scenario?.inputs.length);
+  const nudgeFinish = canFinish && !isRecord && reported && done;
 
   return (
     <div className="flex h-[56px] shrink-0 items-stretch border-b border-arm-sub bg-arm-dark text-white select-none">
@@ -102,14 +119,15 @@ export function TrainingBar({
         <button onClick={onTogglePanel} className={cx(btn, panelOpen && 'bg-arm-sub')}>
           панель
         </button>
+        {nudgeFinish && <span className="self-center text-[12px] text-[#ffd0bd]">карточка отработана — сдайте её</span>}
         <button
           data-step="finish-card"
           onClick={onFinish}
           disabled={!canFinish}
-          title={active && !opened ? 'Сначала откройте карточку' : undefined}
+          title={active && !opened ? 'Сначала откройте карточку' : finalSet || nudgeFinish ? 'По карточке всё сделано — сдайте работу на проверку' : undefined}
           className={cx(
-            'flex h-9 items-center border border-white px-4 text-[15px] font-bold text-white hover:bg-arm-sub disabled:cursor-default disabled:border-[#aab4ba] disabled:opacity-40 disabled:hover:bg-transparent',
-            finalSet && 'border-arm-orange bg-arm-orange',
+            'flex h-9 items-center border px-4 text-[15px] font-bold text-white hover:bg-arm-sub disabled:cursor-default disabled:border-[#aab4ba] disabled:opacity-40 disabled:hover:bg-transparent',
+            finalSet || nudgeFinish ? 'animate-pulse border-arm-orange bg-arm-orange hover:bg-arm-orange' : 'border-white',
           )}
         >
           {isRecord ? 'сохранить запись' : 'завершить карточку'}

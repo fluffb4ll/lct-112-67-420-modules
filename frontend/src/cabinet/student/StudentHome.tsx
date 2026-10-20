@@ -118,17 +118,27 @@ export function StudentHome() {
 
           <div className="flex flex-col gap-4">
             <Panel title="Уровень подготовки">
-              <div className="flex items-baseline gap-2">
-                <span className="text-4xl font-medium">{ready.index}</span>
-                <span className="text-sm text-c-muted">из 100 · {ready.level}</span>
-              </div>
-              <p className="mt-1 text-[12px] text-c-muted">Оценка по рейтингу навыков (модель Эло), пересчитывается после каждой карточки.</p>
-              <div className="mt-4">
-                <HBars
-                  items={SKILLS.map((s) => ({ label: SKILL_LABELS[s], value: Math.max(0, Math.min(100, Math.round(((ratings[s] - 850) / 400) * 100))) }))}
-                  format={(v) => String(v)}
-                />
-              </div>
+              {/* до первой оценённой карточки у всех навыков стартовый рейтинг — показывать его
+                  числами нельзя: выглядит как оценка, которую никто не выставлял */}
+              {mine.length === 0 ? (
+                <p className="text-[13px] text-c-muted">
+                  Нет ни одной оценённой карточки. Уровень подготовки и рейтинг по навыкам появятся после первой сданной работы.
+                </p>
+              ) : (
+                <>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-4xl font-medium">{ready.index}</span>
+                    <span className="text-sm text-c-muted">из 100 · {ready.level}</span>
+                  </div>
+                  <p className="mt-1 text-[12px] text-c-muted">Считается по результатам сданных карточек и пересчитывается после каждой.</p>
+                  <div className="mt-4">
+                    <HBars
+                      items={SKILLS.map((s) => ({ label: SKILL_LABELS[s], value: Math.max(0, Math.min(100, Math.round(((ratings[s] - 850) / 400) * 100))) }))}
+                      format={(v) => String(v)}
+                    />
+                  </div>
+                </>
+              )}
             </Panel>
             <div className="grid grid-cols-2 gap-3">
               <Stat label="Попыток" value={mine.length} />

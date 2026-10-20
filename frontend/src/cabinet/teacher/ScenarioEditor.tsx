@@ -5,6 +5,7 @@ import { describeError } from '../../api/errors';
 import {
   approveScenarioOnServer,
   createScenarioOnServer,
+  DEFAULT_TIME_LIMIT,
   deleteScenarioOnServer,
   fromDetails,
   getScenario,
@@ -19,11 +20,11 @@ import { correctScenario } from '../../api/tutor';
 import { navigate } from '../../app/router';
 import { IncidentCard } from '../../arm/IncidentCard';
 import { OWN_SERVICE_ID } from '../../data/scenarios';
-import { DDS_SERVICES } from '../../data/services';
+import { DDS_SERVICES, MAX_PHONEBOOK } from '../../data/services';
 import { SKILL_LABELS, SKILLS } from '../../domain/skills';
 import { nextStatuses } from '../../domain/statusMachine';
 import { literacyIssues } from '../../domain/text';
-import type { ApplicantStatus, Incident, ResponseStatus, Scenario, ScenarioInput, Skill } from '../../domain/types';
+import type { ApplicantStatus, Incident, ResponseStatus, Scenario, ScenarioInput, ScenarioPhone, Skill } from '../../domain/types';
 import { useMe } from '../../store/session';
 import { useRun } from '../../store/training';
 import { Badge, Button, Checkbox, ConfirmModal, Input, Notice, Panel, Select, Textarea } from '../../ui';
@@ -83,6 +84,15 @@ const textToGroups = (t: string) =>
         .filter(Boolean),
     )
     .filter((l) => l.length);
+
+/** Штатные номера службы как заготовка справочника: преподаватель правит их под занятие */
+const serviceDefaults = (kind: Scenario['serviceKind']): ScenarioPhone[] =>
+  (DDS_SERVICES.find((s) => s.kind === kind) ?? DDS_SERVICES[0]).contacts.map((c) => ({
+    title: c.name && c.name !== 'дежурный' && c.name !== 'бригадир' ? `${c.title}, ${c.name}` : c.title,
+    number: c.number,
+    voice: c.voice,
+    isChief: c.isChief,
+  }));
 
 export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
   const { user } = useMe();
@@ -164,6 +174,8 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
     setMsg(null);
   };
 
+  const phonebook = draft.phonebook ?? [];
+
   const collect = (): Scenario => {
     const services = servicesText
       .split(',')
@@ -190,6 +202,9 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
     if (!s.incident.type.finalType.trim()) return 'Укажите итоговый тип (класс) происшествия';
     if (!s.expected.path.length) return 'Задайте эталонные статусы';
     if (s.expected.callRequired && !s.expected.sampleReport.trim()) return 'Нужен эталонный доклад, раз звонок обязателен';
+    const phones = s.phonebook ?? [];
+    if (phones.some((p) => !p.title.trim() || !p.number.trim())) return 'В телефонном справочнике есть строка без названия или номера';
+    if (new Set(phones.map((p) => p.number)).size !== phones.length) return 'В телефонном справочнике повторяются номера';
     return null;
   };
 
@@ -374,6 +389,59 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
                 <option value={2}>2 — средняя</option>
                 <option value={3}>3 — высокая</option>
               </Select>
+              <Input
+                label="Норматив на отработку, секунд"
+                hint={`по умолчанию ${DEFAULT_TIME_LIMIT}`}
+                type="number"
+                min={30}
+                max={1800}
+                value={draft.timeLimitSec ?? DEFAULT_TIME_LIMIT}
+                onChange={(e) => upd((d) => void (d.timeLimitSec = Math.max(30, Math.min(1800, Number(e.target.value) || DEFAULT_TIME_LIMIT))))}
+              />
+            </div>
+            <div className="mt-3">
+              <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-[13px] font-medium">
+                  Телефонный справочник занятия
+                  <span className="ml-1.5 font-normal text-c-muted">кому обучающийся может позвонить, до {MAX_PHONEBOOK} номеров</span>
+                </div>
+                <div className="flex gap-1.5">
+                  {!phonebook.length && (
+                    <Button size="sm" onClick={() => upd((d) => void (d.phonebook = serviceDefaults(d.serviceKind)))}>
+                      взять номера службы
+                    </Button>
+                  )}
+                  {phonebook.length > 0 && phonebook.length < MAX_PHONEBOOK && (
+                    <Button size="sm" onClick={() => upd((d) => void (d.phonebook = [...(d.phonebook ?? []), { title: '', number: '', voice: 'male' }]))}>
+                      добавить номер
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {!phonebook.length ? (
+                <div className="text-[12px] text-c-muted">
+                  Список пуст — обучающийся увидит штатные номера своей службы. Нажмите «взять номера службы», чтобы задать их под занятие.
+                </div>
+              ) : (
+                <div className="grid gap-1.5">
+                  {phonebook.map((p, i) => (
+                    <div key={i} className="grid grid-cols-[1fr_110px_150px_auto] items-end gap-1.5">
+                      <Input placeholder="Кто отвечает" value={p.title} onChange={(e) => upd((d) => void (d.phonebook![i].title = e.target.value))} />
+                      <Input placeholder="Номер" value={p.number} onChange={(e) => upd((d) => void (d.phonebook![i].number = e.target.value.replace(/[^\d+*#]/g, '')))} />
+                      <Select value={p.voice} onChange={(e) => upd((d) => void (d.phonebook![i].voice = e.target.value as 'male' | 'female'))}>
+                        <option value="male">мужской голос</option>
+                        <option value="female">женский голос</option>
+                      </Select>
+                      <Button size="sm" onClick={() => upd((d) => void (d.phonebook = d.phonebook!.filter((_, j) => j !== i)))}>
+                        удалить
+                      </Button>
+                    </div>
+                  ))}
+                  <Checkbox checked={!!draft.withApplicant} onChange={(v) => upd((d) => void (d.withApplicant = v))}>
+                    Показать номер заявителя (АОН из карточки) — обучающийся сможет ему перезвонить
+                  </Checkbox>
+                </div>
+              )}
             </div>
             <div className="mt-3">
               <div className="mb-1.5 text-[13px] font-medium">Отрабатываемые навыки</div>
@@ -534,7 +602,7 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
                 />
               ))}
               <div>
-                <Button size="sm" onClick={() => upd((d) => void d.inputs.push({ afterStatus: d.expected.path[0] ?? 'Принята', delaySec: 12, from: 'Мастер участка', text: '' }))}>
+                <Button size="sm" onClick={() => upd((d) => void d.inputs.push({ afterStatus: d.expected.path[0] ?? 'Принята', delaySec: 12, from: 'Мастер участка', text: '', via: 'call', voice: 'male' }))}>
                   + вводная по ходу работ
                 </Button>
               </div>
@@ -662,7 +730,7 @@ function Scaled({ width, height, children }: { width: number; height: number; ch
 
 function InputRow({ value, statuses, onChange, onRemove }: { value: ScenarioInput; statuses: ResponseStatus[]; onChange: (v: ScenarioInput) => void; onRemove: () => void }) {
   return (
-    <div className="grid gap-2 border border-c-line p-2 sm:grid-cols-[170px_80px_1fr_auto]">
+    <div className="grid gap-2 border border-c-line p-2 sm:grid-cols-[170px_80px_1fr_auto_auto]">
       <Select value={value.afterStatus} onChange={(e) => onChange({ ...value, afterStatus: e.target.value as ResponseStatus })}>
         {statuses.map((s) => (
           <option key={s} value={s}>
@@ -675,6 +743,10 @@ function InputRow({ value, statuses, onChange, onRemove }: { value: ScenarioInpu
         <Input value={value.from} onChange={(e) => onChange({ ...value, from: e.target.value })} placeholder="От кого" />
         <Input value={value.text} onChange={(e) => onChange({ ...value, text: e.target.value })} placeholder="Текст вводной" />
       </div>
+      <label className="flex items-center gap-1.5 self-center text-[12px] whitespace-nowrap">
+        <input type="checkbox" checked={value.via === 'call'} onChange={(e) => onChange({ ...value, via: e.target.checked ? 'call' : 'panel' })} />
+        звонком
+      </label>
       <Button size="sm" variant="ghost" onClick={onRemove}>
         убрать
       </Button>

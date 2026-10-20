@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useAllScenarios } from '../store/serverScenarios';
 import { DEFAULT_NORMS } from '../domain/evaluate';
 import { SKILL_LABELS } from '../domain/skills';
-import type { CardResult } from '../store/training';
+import { useRun, type CardResult } from '../store/training';
 import { cx } from '../ui/cx';
 import { scoreBadge, serverStatusLine } from './serverScore';
 import { useServerScore } from './useServerScore';
@@ -17,6 +17,7 @@ const orangeBtn = 'h-10 border border-arm-orange bg-white px-4 text-[15px] text-
 
 export function ResultModal({ result, isLast, onNext }: { result: CardResult; isLast: boolean; onNext: () => void }) {
   const [showRef, setShowRef] = useState(false);
+  const missed = useRun((s) => s.missedCalls);
   const scenarios = useAllScenarios();
   const server = useServerScore(result.serverCardId);
   const ev = result.evaluation;
@@ -73,6 +74,12 @@ export function ResultModal({ result, isLast, onNext }: { result: CardResult; is
           <Metric label="скорость набора" value={ev.cpm === null ? '—' : `${ev.cpm}`} sub="знаков в минуту" />
           <Metric label="прогноз до попытки" value={`${Math.round(ev.predicted * 100)}%`} sub={ev.passed === ev.predicted >= 0.5 ? 'сбылся' : 'не сбылся'} />
         </div>
+
+        {missed > 0 && (
+          <div className="mt-3 border-l-4 border-arm-orange bg-arm-block px-3 py-2 text-[13px]">
+            Пропущено входящих вызовов: <b>{missed}</b>. Доклад всё равно попал во «Вводные» текстом, работа не встала — но на дежурстве пропущенный вызов бригады считается нарушением: трубку нужно снимать.
+          </div>
+        )}
 
         <table className="mt-3 w-full text-[13px]">
           <thead>

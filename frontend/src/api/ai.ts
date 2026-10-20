@@ -42,18 +42,103 @@ async function aiFetch(path: string, init: RequestInit & { timeoutMs?: number } 
   }
 }
 
+/*
+ * Ответ модели читаем под тем же ограничением времени, что и сам запрос: срок жизни
+ * AbortController в aiFetch кончается на заголовках, а тело языковая модель может тянуть
+ * сколько угодно — без этого окно генерации зависает насовсем.
+ */
+async function readJson<T>(res: Promise<Response>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new AiUnavailable(`ИИ-контур молчит дольше ${Math.round(timeoutMs / 1000)} с`)), timeoutMs);
+  });
+  try {
+    const body = await Promise.race([res.then((r) => r.json() as Promise<T>), limit]);
+    return body;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const postJson = (path: string, body: unknown, timeoutMs?: number) =>
   aiFetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), timeoutMs });
+
+/*
+ * Сколько ждём языковую модель на один сценарий. На слабом сервере она пишет минутами, а
+ * прерванная генерация пропадает целиком, поэтому ждать стоит до конца: контур кладёт на
+ * карточку до трёх минут, nginx — 200 с, здесь столько же.
+ */
+export const COMPOSE_TIMEOUT_MS = 200_000;
+
+/** Модель, которой отвечал контур; null — на сервере модель не подключена */
+export interface AiModelRef {
+  component: string;
+  model_name: string;
+  model_version: string;
+}
 
 export interface ComposeResult {
   scenario: Scenario;
   by: 'llm' | 'template';
+  /** поля, текст которых написала модель */
+  applied?: string[];
+  /** поля, которые модель написала, но контур их не пропустил */
+  rejected?: string[];
+  model?: AiModelRef | null;
+}
+
+const COMPOSE_FIELDS: Record<string, string> = {
+  title: 'название',
+  description: 'описание',
+  chiefReply: 'ответ руководителя',
+  sampleReport: 'эталонный доклад',
+  inputs: 'реплики исполнителя',
+};
+
+/**
+ * Почему текст остался от заготовки. Берётся из ответа контура, а не из догадок: model: null —
+ * модели на сервере нет вовсе; непустой rejected — модель написала, но проверка не пропустила;
+ * поля model нет совсем — на сервере сборка контура, которая его ещё не отдаёт. Время ответа
+ * различает оставшиеся случаи: доли секунды — контур даже не звал модель, десятки секунд — звал.
+ */
+export function composeFallbackReason(r: ComposeResult, seconds?: number): string {
+  const took = seconds === undefined ? '' : ` (ответ пришёл за ${seconds < 10 ? seconds.toFixed(1) : seconds.toFixed(0)} с)`;
+  if (r.model === null) return `на сервере не подключена языковая модель — контур работает по правилам${took}`;
+  if (r.model === undefined)
+    return `на сервере сборка ИИ-контура без полей model и rejected — причину он не сообщает${took}`;
+  const bad = (r.rejected ?? []).map((f) => COMPOSE_FIELDS[f] ?? f);
+  if (bad.length) return `модель ${r.model.model_name} написала текст, но проверка контура его отклонила: ${bad.join(', ')}`;
+  return `модель ${r.model.model_name} не ответила за отведённое время или вернула ответ, который не разобрать${took}`;
 }
 
 /** Языковая модель переписывает текст заготовки; эталон и проверки остаются от правил */
-export async function composeScenario(scenario: Scenario, complication: Complication, difficulty: number): Promise<ComposeResult> {
-  const res = await postJson('/v1/scenarios/compose', { scenario, complication, difficulty });
-  return (await res.json()) as ComposeResult;
+export function composeScenario(scenario: Scenario, complication: Complication, difficulty: number): Promise<ComposeResult> {
+  // на слабом сервере модель пишет долго: ждём ограниченное время, иначе остаётся текст шаблона
+  return readJson<ComposeResult>(postJson('/v1/scenarios/compose', { scenario, complication, difficulty }, COMPOSE_TIMEOUT_MS), COMPOSE_TIMEOUT_MS);
+}
+
+/** Сколько ждём реплику абонента: дальше отвечает шаблон */
+const REPLY_TIMEOUT_MS = 10_000;
+
+export interface DialogueReply {
+  reply: string;
+  by: 'llm' | 'template';
+}
+
+/**
+ * Реплика абонента в учебном телефоне: роль, краткая карточка, ход разговора и то,
+ * что сказал обучающийся. Если контур молчит — остаётся шаблон, который фронт прислал сам.
+ */
+export function dialogueReply(req: {
+  role: string;
+  roleKey: 'chief' | 'master' | 'emergency' | 'other';
+  said: string;
+  fallback: string;
+  card: { address: string; incident: string; description: string; victims: boolean };
+  history: { who: 'me' | 'peer'; text: string }[];
+}): Promise<DialogueReply> {
+  // ждать реплику дольше десяти секунд нельзя — это телефонный разговор, а не переписка
+  return readJson<DialogueReply>(postJson('/v1/dialogue/reply', req, REPLY_TIMEOUT_MS), REPLY_TIMEOUT_MS);
 }
 
 export interface Transcript {
@@ -64,13 +149,13 @@ export interface Transcript {
 /** Распознавание речи на сервере (faster-whisper), без облачных сервисов. Тело — сама запись */
 export async function transcribe(audio: Blob, hints: string[] = []): Promise<Transcript> {
   const q = hints.length ? `?hints=${encodeURIComponent(hints.join(','))}` : '';
-  const res = await aiFetch(`/v1/stt${q}`, {
+  const res = aiFetch(`/v1/stt${q}`, {
     method: 'POST',
     headers: { 'Content-Type': audio.type || 'application/octet-stream' },
     body: audio,
     timeoutMs: 60_000,
   });
-  return (await res.json()) as Transcript;
+  return readJson<Transcript>(res, 60_000);
 }
 
 /** Синтез речи на сервере (Piper); ответ — WAV */

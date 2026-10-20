@@ -242,6 +242,7 @@ function GenerateModal({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [progress, setProgress] = useState('');
+  const ticker = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   // окно закрыли посреди генерации — оставшиеся сценарии не пишем и не сохраняем
   const closed = useRef(false);
   useEffect(
@@ -282,9 +283,17 @@ function GenerateModal({
         mutate((d) => d.scenarios.unshift({ ...sc, id: scenarioId }));
       },
       closed: () => closed.current,
-      onProgress: (i) => setProgress(`ИИ пишет сценарий ${i + 1} из ${list.length}…`),
+      onProgress: (i) => {
+        // на слабом сервере карточка пишется минутами: без счётчика это выглядит как зависание
+        clearInterval(ticker.current);
+        const started = Date.now();
+        const tick = () => setProgress(`ИИ пишет сценарий ${i + 1} из ${list.length}… ${Math.round((Date.now() - started) / 1000)} с`);
+        tick();
+        ticker.current = setInterval(tick, 1000);
+      },
       onSaveError: (e) => setErr(describeError(e, 'Не удалось сохранить сценарий')),
     });
+    clearInterval(ticker.current);
     if (!closed.current) {
       setBusy(false);
       setProgress('');

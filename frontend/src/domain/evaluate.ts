@@ -1,4 +1,4 @@
-import { COMMENT_REQUIRED, PRIMARY } from './statusMachine';
+import { COMMENT_REQUIRED, PRIMARY, TERMINAL } from './statusMachine';
 import { SKILL_ADVICE, SKILL_LABELS } from './skills';
 import { cpm, literacyIssues, matchGroups } from './text';
 import type { Evaluation, EvaluationCheck, ResponseStatus, Scenario, Skill, TrainingEvent } from './types';
@@ -45,6 +45,8 @@ export function evaluateDds(
   predicted: number,
   pickNext: (skill: Skill) => string | undefined,
   chiefContactIds: string[],
+  /** Время, пока карточка стояла на паузе (распознавание речи): в норматив не идёт */
+  pausedMs = 0,
 ): Evaluation {
   const exp = scenario.expected;
   const opened = events.find((e) => e.kind === 'opened');
@@ -55,7 +57,7 @@ export function evaluateDds(
   const lastT = finished?.t ?? events[events.length - 1]?.t ?? 0;
   const openSec = opened ? opened.t / 1000 : null;
   const primarySec = firstPrimary ? firstPrimary.t / 1000 : null;
-  const totalSec = lastT / 1000;
+  const totalSec = Math.max(0, lastT - pausedMs) / 1000;
   const comments = sets.map((e) => e.comment ?? '').filter(Boolean);
   const allComments = comments.join(' ');
 
@@ -122,12 +124,15 @@ export function evaluateDds(
         : COMMENT_REQUIRED.includes(want)
           ? 'refusal_comment'
           : 'work_progress';
+    // в группе перечислены равноправные варианты, достаточно любого — показываем все:
+    // «36814851…» в одиночку читается как непонятные цифры, а не как номер карточки
+    const need = (g: string[]) => (g.length === 1 ? `«${g[0]}»` : `одного из: ${g.map((s) => `«${s}»`).join(', ')}`);
     const detail =
       total === 0
         ? 'Особых требований к тексту нет'
         : missing.length === 0
           ? 'Все ключевые сведения указаны'
-          : `Не указано: ${missing.map((g) => `«${g[0]}…»`).join(', ')}. Эталон: «${Object.values(exp.sample)[0] ?? ''}»`;
+          : `В комментарии не хватает ${missing.map(need).join('; ')}. Эталон: «${Object.values(exp.sample)[0] ?? ''}»`;
     checks.push({ id: 'comment_content', title: 'Полнота комментария', ok: points === max, points, max, detail, ref: 'Памятка, стр. 26, 30', skill });
   }
 
@@ -135,7 +140,9 @@ export function evaluateDds(
   {
     const max = 15;
     const common = lcs(path, exp.path);
-    const extra = path.filter((s) => !exp.path.includes(s));
+    // карточку нельзя закрыть без завершающего статуса, поэтому он не считается лишним,
+    // даже если короткий эталон до него не доходит
+    const extra = path.filter((s) => !exp.path.includes(s) && !TERMINAL.includes(s));
     // пустой эталон давал NaN во всём балле; в ai за пустой эталон — полный балл
     let points = exp.path.length ? pyRound((common / exp.path.length) * max) : max;
     if (extra.length) points = Math.max(0, points - 5);
@@ -187,7 +194,8 @@ export function evaluateDds(
   // 8. Грамотность
   {
     const max = 5;
-    const issues = comments.flatMap((c) => literacyIssues(c));
+    // одинаковые замечания по разным комментариям не повторяем
+    const issues = [...new Map(comments.flatMap((c) => literacyIssues(c)).map((i) => [i.message, i])).values()];
     const points = !comments.length ? max : issues.length === 0 ? max : issues.length === 1 ? 3 : 1;
     const detail = !comments.length ? 'Комментариев нет' : issues.length ? issues.map((i) => i.message).join('; ') : 'Замечаний нет';
     checks.push({ id: 'literacy', title: 'Грамотность комментариев', ok: points === max, points, max, detail, skill: 'literacy' });

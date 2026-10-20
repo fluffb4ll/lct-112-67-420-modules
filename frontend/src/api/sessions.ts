@@ -179,7 +179,17 @@ export async function submitCard(req: SubmitCardRequest): Promise<{ cardId: stri
   if (!cardId) throw new Error('Сервер принял карточку, но не вернул её номер');
   return { cardId };
 }
-export const getCard = (cardId: string) => apiFetch<Record<string, unknown>>(`/cards/${cardId}`);
+
+/** Сданная карточка целиком — её показывает преподаватель кнопкой «Работа» */
+export interface CardDetails extends CardSummary {
+  submittedCard: SubmittedCard;
+  operatorNotes: string | null;
+  evaluation: Evaluation | null;
+  /** остальные поля ответа читает serverScore.ts */
+  [key: string]: unknown;
+}
+
+export const getCard = (cardId: string) => apiFetch<CardDetails>(`/cards/${cardId}`);
 export const getEvaluation = (cardId: string) => apiFetch<Evaluation>(`/evaluations/cards/${cardId}`);
 /** Запустить (повторно) оценку ИИ-контура; ответ языковой модели — до минуты */
 export const requestAiEvaluation = (cardId: string) => apiFetch<Evaluation>(`/evaluations/cards/${cardId}/ai`, { method: 'POST' });
