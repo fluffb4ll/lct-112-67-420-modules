@@ -163,7 +163,7 @@ export function generateScenarios(c: Classifier, p: GenerateParams): Scenario[] 
         sample: { Принята: 'Принято, мастер направлен на осмотр.', 'Отказ от выполнения работ': 'Отказ от выполнения работ: объект на территории стройплощадки ООО «СтройИнвест». Информация передана застройщику.' },
         commentMustMention: [['стройинвест', 'застройщик'], ['передан', 'сообщ']],
       };
-      inputs = [{ afterStatus: 'Принята', delaySec: 12, from: 'Мастер участка', text: 'Осмотрел: это территория стройплощадки ООО «СтройИнвест», не наша. Работы проводить не будем.' }];
+      inputs = [{ afterStatus: 'Принята', delaySec: 12, from: 'Мастер участка', text: 'Осмотрел: это территория стройплощадки ООО «СтройИнвест», не наша. Работы проводить не будем.', via: 'call', voice: 'male' }];
     } else if (comp === 'progress') {
       skills.splice(0, 1, 'work_progress', 'report');
       expected = {
@@ -179,9 +179,9 @@ export function generateScenarios(c: Classifier, p: GenerateParams): Scenario[] 
         callRequired: true,
       };
       inputs = [
-        { afterStatus: 'Принята', delaySec: 10, from: 'Мастер участка', text: 'Бригада выехала.' },
-        { afterStatus: 'Начало реагирования', delaySec: 10, from: 'Мастер участка', text: 'Бригада на месте, приступили.' },
-        { afterStatus: 'Прибытие', delaySec: 14, from: 'Мастер участка', text: 'Работы выполнены, последствия устранены.' },
+        { afterStatus: 'Принята', delaySec: 10, from: 'Мастер участка', text: 'Бригада выехала.', via: 'call', voice: 'male' },
+        { afterStatus: 'Начало реагирования', delaySec: 10, from: 'Мастер участка', text: 'Бригада на месте, приступили.', via: 'call', voice: 'male' },
+        { afterStatus: 'Прибытие', delaySec: 14, from: 'Мастер участка', text: 'Работы выполнены, последствия устранены.', via: 'call', voice: 'male' },
       ];
     }
     if (p.difficulty >= 2 && comp === 'none') description += ' Заявитель взволнован, адрес называет не сразу.';

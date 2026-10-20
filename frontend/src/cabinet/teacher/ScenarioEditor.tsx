@@ -5,6 +5,7 @@ import { describeError } from '../../api/errors';
 import {
   approveScenarioOnServer,
   createScenarioOnServer,
+  DEFAULT_TIME_LIMIT,
   deleteScenarioOnServer,
   fromDetails,
   getScenario,
@@ -374,6 +375,15 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
                 <option value={2}>2 — средняя</option>
                 <option value={3}>3 — высокая</option>
               </Select>
+              <Input
+                label="Норматив на отработку, секунд"
+                hint={`по умолчанию ${DEFAULT_TIME_LIMIT}`}
+                type="number"
+                min={30}
+                max={1800}
+                value={draft.timeLimitSec ?? DEFAULT_TIME_LIMIT}
+                onChange={(e) => upd((d) => void (d.timeLimitSec = Math.max(30, Math.min(1800, Number(e.target.value) || DEFAULT_TIME_LIMIT))))}
+              />
             </div>
             <div className="mt-3">
               <div className="mb-1.5 text-[13px] font-medium">Отрабатываемые навыки</div>
@@ -534,7 +544,7 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
                 />
               ))}
               <div>
-                <Button size="sm" onClick={() => upd((d) => void d.inputs.push({ afterStatus: d.expected.path[0] ?? 'Принята', delaySec: 12, from: 'Мастер участка', text: '' }))}>
+                <Button size="sm" onClick={() => upd((d) => void d.inputs.push({ afterStatus: d.expected.path[0] ?? 'Принята', delaySec: 12, from: 'Мастер участка', text: '', via: 'call', voice: 'male' }))}>
                   + вводная по ходу работ
                 </Button>
               </div>
@@ -662,7 +672,7 @@ function Scaled({ width, height, children }: { width: number; height: number; ch
 
 function InputRow({ value, statuses, onChange, onRemove }: { value: ScenarioInput; statuses: ResponseStatus[]; onChange: (v: ScenarioInput) => void; onRemove: () => void }) {
   return (
-    <div className="grid gap-2 border border-c-line p-2 sm:grid-cols-[170px_80px_1fr_auto]">
+    <div className="grid gap-2 border border-c-line p-2 sm:grid-cols-[170px_80px_1fr_auto_auto]">
       <Select value={value.afterStatus} onChange={(e) => onChange({ ...value, afterStatus: e.target.value as ResponseStatus })}>
         {statuses.map((s) => (
           <option key={s} value={s}>
@@ -675,6 +685,10 @@ function InputRow({ value, statuses, onChange, onRemove }: { value: ScenarioInpu
         <Input value={value.from} onChange={(e) => onChange({ ...value, from: e.target.value })} placeholder="От кого" />
         <Input value={value.text} onChange={(e) => onChange({ ...value, text: e.target.value })} placeholder="Текст вводной" />
       </div>
+      <label className="flex items-center gap-1.5 self-center text-[12px] whitespace-nowrap">
+        <input type="checkbox" checked={value.via === 'call'} onChange={(e) => onChange({ ...value, via: e.target.checked ? 'call' : 'panel' })} />
+        звонком
+      </label>
       <Button size="sm" variant="ghost" onClick={onRemove}>
         убрать
       </Button>

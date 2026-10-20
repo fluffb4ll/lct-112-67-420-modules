@@ -44,6 +44,7 @@ export function IncidentCard({
   serviceId,
   phoneLabel,
   inCall,
+  incomingFrom,
   onPhone,
   onClose,
   onStatusForm,
@@ -53,6 +54,8 @@ export function IncidentCard({
   serviceId: string;
   phoneLabel: string;
   inCall: boolean;
+  /** Кто звонит прямо сейчас: плашка телефона мигает зелёным */
+  incomingFrom?: string;
   onPhone: () => void;
   onClose: () => void;
   onStatusForm: () => void;
@@ -64,7 +67,7 @@ export function IncidentCard({
   return (
     <div className="relative flex min-h-0 flex-1 flex-col bg-arm-card text-arm-text">
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-2">
-        <TopBar incident={incident} phoneLabel={phoneLabel} inCall={inCall} onPhone={onPhone} />
+        <TopBar incident={incident} phoneLabel={phoneLabel} inCall={inCall} incomingFrom={incomingFrom} onPhone={onPhone} />
         <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,47%)_minmax(0,1fr)] gap-2">
           <div className="flex min-h-0 flex-col gap-2">
             <Block className="flex h-[42px] items-center">
@@ -158,7 +161,7 @@ function Block({ children, className }: { children: ReactNode; className?: strin
   return <div className={cx('bg-arm-block px-2 py-2', className)}>{children}</div>;
 }
 
-function TopBar({ incident, phoneLabel, inCall, onPhone }: { incident: Incident; phoneLabel: string; inCall: boolean; onPhone: () => void }) {
+function TopBar({ incident, phoneLabel, inCall, incomingFrom, onPhone }: { incident: Incident; phoneLabel: string; inCall: boolean; incomingFrom?: string; onPhone: () => void }) {
   const phoneField = (label: string, value: string, extraIcons: ReactNode, aonBtn = false) => (
     <>
       <div className="flex w-9 shrink-0 flex-col items-center justify-center gap-3 text-[#5f676d]">
@@ -182,14 +185,18 @@ function TopBar({ incident, phoneLabel, inCall, onPhone }: { incident: Incident;
       <button
         onClick={onPhone}
         data-step="softphone"
-        className={cx('flex w-[280px] shrink-0 bg-arm-block text-left hover:brightness-[0.97]', inCall && 'ring-2 ring-[#3aa35c] ring-inset')}
-        title="Телефон (учебный софтфон)"
+        className={cx(
+          'flex w-[280px] shrink-0 text-left hover:brightness-[0.97]',
+          incomingFrom ? 'animate-pulse bg-[#d7f0dd] ring-2 ring-[#2e8b4e] ring-inset' : 'bg-arm-block',
+          inCall && !incomingFrom && 'ring-2 ring-[#3aa35c] ring-inset',
+        )}
+        title={incomingFrom ? `Входящий вызов: ${incomingFrom}` : 'Телефон (учебный софтфон)'}
       >
-        <span className={cx('flex w-16 items-center justify-center', inCall ? 'text-[#2e8b4e]' : 'text-arm-text')}>
-          {inCall ? <IcPhone size={26} /> : <IcHangup size={30} />}
+        <span className={cx('flex w-16 items-center justify-center', incomingFrom || inCall ? 'text-[#2e8b4e]' : 'text-arm-text')}>
+          {incomingFrom || inCall ? <IcPhone size={26} /> : <IcHangup size={30} />}
         </span>
         <span className="flex flex-1 flex-col justify-center gap-1.5">
-          <span className="text-[13px]">{phoneLabel}</span>
+          <span className={cx('text-[13px]', incomingFrom && 'font-bold text-[#1f6b3a]')}>{incomingFrom ? `Входящий: ${incomingFrom}` : phoneLabel}</span>
           <span className="flex gap-2">
             <span className="bg-[#c4c8cb] px-3 py-0.5 text-[10px] text-[#6d7378]">записи звонков</span>
             <span className="border border-[#9aa1a6] bg-white px-3 py-0.5 text-[10px]">список SMS</span>

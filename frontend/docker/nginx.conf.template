@@ -91,6 +91,16 @@ server {
             proxy_pass $ai;
         }
 
+        # реплика абонента в учебном телефоне: модель отвечает на доклад (фронт ждёт 10 с)
+        location = /ai/v1/dialogue/reply {
+            limit_req zone=ai_addr burst=100 nodelay;
+            limit_req zone=ai_voice burst=10 nodelay;
+            proxy_read_timeout 15s;
+            set $ai "${AI_URL}";
+            rewrite ^/ai/(.*)$ /$1 break;
+            proxy_pass $ai;
+        }
+
         # языковая модель переписывает текст сценария — самое тяжёлое (фронт ждёт 90 с)
         location = /ai/v1/scenarios/compose {
             limit_req zone=ai_addr burst=100 nodelay;

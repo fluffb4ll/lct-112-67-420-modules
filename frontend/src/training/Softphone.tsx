@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import { dialogueReply } from '../api/ai';
 import { peerReply, resolvePeer } from '../api/tutor';
 import { useNow } from '../app/hooks';
 import { IcClose, IcHangup, IcMic, IcPhone } from '../arm/icons';
 import { useRun } from '../store/training';
 import { cx } from '../ui/cx';
 import { phoneLabel, useSoftphone } from './softphoneStore';
-import { busy, ringback } from './sounds';
+import { busy, ringback, ringtone } from './sounds';
 import { listen, recognize, recordMic, serverSttAvailable, speak, sttAvailable, stopSpeaking, type Listener, type Recording } from './voice';
 
 /*
@@ -15,6 +16,13 @@ import { listen, recognize, recordMic, serverSttAvailable, speak, sttAvailable, 
  * Речь распознаёт и синтезирует ИИ-контур (faster-whisper и Piper, офлайн); без него — браузер или ввод текстом.
  * Кнопки быстрого набора — как клавиши DSS на телефоне РТУ Т16Р в учебном классе.
  */
+
+/** Номер звонящего: ищем его в списке абонентов службы по должности или имени */
+function incomingNumber(from: string, contacts: { title: string; name: string; number: string }[]) {
+  const low = from.toLowerCase();
+  const hit = contacts.find((c) => low.includes(c.title.toLowerCase()) || c.title.toLowerCase().includes(low) || low.includes(c.name.toLowerCase()));
+  return hit?.number ?? 'номер не определён';
+}
 
 export function Softphone() {
   const run = useRun();
@@ -36,6 +44,57 @@ export function Softphone() {
   // номер звонка: после await проверяем, что звонок тот же (не сброшен и не набран новый)
   const callSeq = useRef(0);
   const finishing = useRef(false);
+
+  // Входящий вызов: доклад бригады. Звоним 20 секунд, дальше — пропущенный.
+  const MISS_AFTER_MS = 20_000;
+  const incoming = sp.incoming;
+  const answering = useRef(false);
+  const left = incoming ? Math.max(0, Math.ceil((MISS_AFTER_MS - (now - incoming.since)) / 1000)) : 0;
+
+  useEffect(() => {
+    if (!incoming) return;
+    let alive = true;
+    ringtone();
+    const ring = setInterval(() => alive && ringtone(), 3000);
+    const miss = setTimeout(() => {
+      if (!alive) return;
+      busy();
+      useRun.getState().incomingMissed(incoming.from, incoming.text);
+      useSoftphone.getState().dropIncoming(true);
+    }, MISS_AFTER_MS);
+    return () => {
+      alive = false;
+      clearInterval(ring);
+      clearTimeout(miss);
+    };
+  }, [incoming]);
+
+  const answerIncoming = async () => {
+    const call = useSoftphone.getState().incoming;
+    if (!call || answering.current) return;
+    answering.current = true;
+    const sphone = useSoftphone.getState();
+    sphone.patch({ phase: 'connected', number: 'входящий', peer: null, connectedAt: Date.now(), lines: [{ who: 'peer', text: call.text }], listening: true });
+    sphone.dropIncoming(false);
+    useRun.getState().incomingAnswered(call.from, call.text);
+    try {
+      await speak(call.text, call.voice);
+    } finally {
+      answering.current = false;
+      if (useSoftphone.getState().phase === 'connected' && useSoftphone.getState().listening) {
+        useSoftphone.getState().patch({ phase: 'idle', number: '', connectedAt: null, lines: [], listening: false });
+        useSoftphone.getState().dropIncoming(true);
+      }
+    }
+  };
+
+  const declineIncoming = () => {
+    const call = useSoftphone.getState().incoming;
+    if (!call) return;
+    busy();
+    useRun.getState().incomingMissed(call.from, call.text);
+    useSoftphone.getState().dropIncoming(true);
+  };
 
   useEffect(() => {
     alive.current = true;
@@ -135,7 +194,34 @@ export function Softphone() {
       }
       transcript = text;
     }
-    const reply = peerReply(st.peer, st.number, transcript, run.current?.scenario ?? null);
+    const saidBefore = st.lines.filter((l) => l.who === 'me').map((l) => l.text);
+    // реплику пишет модель ИИ-контура; контур недоступен или ответил негодно — остаётся наш шаблон
+    const template = peerReply(st.peer, st.number, transcript, run.current?.scenario ?? null, saidBefore);
+    const card = run.journal.find((i) => i.id === run.current?.incidentId);
+    const roleKey: 'chief' | 'master' | 'emergency' | 'other' = st.peer.isChief
+      ? 'chief'
+      : /мастер/i.test(st.peer.title)
+        ? 'master'
+        : /аварийн|бригад|дежурн/i.test(st.peer.title)
+          ? 'emergency'
+          : 'other';
+    const reply = await dialogueReply({
+      role: st.peer.title,
+      roleKey,
+      said: transcript,
+      fallback: template,
+      card: {
+        address: card ? `${card.address.street}, ${card.address.house}` : '',
+        incident: card?.type.finalType ?? '',
+        description: card?.descriptions.map((d) => d.text).join(' ') ?? '',
+        victims: !!card?.flags.victims,
+      },
+      history: st.lines,
+    }).then(
+      (r) => r.reply,
+      () => template,
+    );
+    if (!live()) return;
     sp.patch({
       phase: 'reply',
       lines: [...st.lines, { who: 'me', text: transcript || '(тишина)' }, { who: 'peer', text: reply }],
@@ -180,7 +266,34 @@ export function Softphone() {
         </button>
       </div>
 
-      {!inCall && (
+      {incoming && (
+        <div className="mx-4 mb-3 bg-[#1f6b3a] px-4 py-3 text-white">
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 shrink-0 animate-pulse items-center justify-center rounded-full bg-[#2e8b4e]">
+              <IcPhone size={24} />
+            </span>
+            <div className="min-w-0">
+              <div className="text-[11px] tracking-wide text-[#cfe8d7] uppercase">входящий вызов</div>
+              <div className="truncate text-[18px] font-bold">{incoming.from}</div>
+              <div className="text-[12px] text-[#cfe8d7]">
+                {incomingNumber(incoming.from, contacts)} · ответьте за {left} с
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button onClick={() => void answerIncoming()} className="flex h-10 flex-1 items-center justify-center gap-2 bg-[#2e8b4e] font-bold text-white hover:brightness-110">
+              <IcPhone size={18} />
+              ответить
+            </button>
+            <button onClick={declineIncoming} className="flex h-10 w-[130px] items-center justify-center gap-2 bg-[#8d2b2b] font-bold text-white hover:brightness-110">
+              <IcHangup size={18} />
+              отклонить
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!inCall && !incoming && (
         <div className="px-4 pb-4">
           <form
             className="flex gap-2"

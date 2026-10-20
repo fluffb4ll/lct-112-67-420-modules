@@ -42,7 +42,8 @@ export interface Role {
   builtIn: boolean;
 }
 
-export type Station = 'dds' | '112';
+/** Тренажёр готовит диспетчера ДДС; рабочее место оператора 112 в учебном ПО не воспроизводится */
+export type Station = 'dds';
 
 export interface User {
   id: string;
@@ -204,6 +205,10 @@ export interface ScenarioInput {
   delaySec: number;
   from: string; // «Мастер участка»
   text: string;
+  /** Как приходит: звонком на софтфон (доклад бригады) или строкой в панель «Вводные» */
+  via?: 'call' | 'panel';
+  /** Голос звонящего при синтезе речи */
+  voice?: 'male' | 'female';
 }
 
 /** Шаг режима «делай как я» */
@@ -249,6 +254,8 @@ export interface Scenario {
   createdAt: string;
   approvedBy?: string;
   approvedAt?: string;
+  /** Норматив на отработку карточки, секунд (задаёт преподаватель) */
+  timeLimitSec?: number;
   /** Шаблон карточки. id/время/служба обучающегося подставляются при выдаче */
   incident: Omit<Incident, 'id' | 'createdAt'>;
   expected: ScenarioExpected;
@@ -323,6 +330,8 @@ export type TrainingEventKind =
   | 'call_connected'
   | 'call_ended'
   | 'input_received'
+  | 'call_incoming'
+  | 'call_missed'
   | 'hint'
   | 'finished';
 

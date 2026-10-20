@@ -173,7 +173,13 @@ export function listSessions(q: { studyGroupId?: string; teacherId?: string; act
 }
 
 export const submitCard = (req: SubmitCardRequest) => apiFetch<{ cardId: string }>('/cards/submit', { method: 'POST', body: req });
-export const getCard = (cardId: string) => apiFetch<Record<string, unknown>>(`/cards/${cardId}`);
+export interface CardDetails extends CardSummary {
+  submittedCard: SubmittedCard;
+  operatorNotes: string | null;
+  evaluation: Evaluation | null;
+}
+
+export const getCard = (cardId: string) => apiFetch<CardDetails>(`/cards/${cardId}`);
 export const getEvaluation = (cardId: string) => apiFetch<Evaluation>(`/evaluations/cards/${cardId}`);
 /** Запустить (повторно) оценку ИИ-контура; ответ языковой модели — до минуты */
 export const requestAiEvaluation = (cardId: string) => apiFetch<Evaluation>(`/evaluations/cards/${cardId}/ai`, { method: 'POST' });

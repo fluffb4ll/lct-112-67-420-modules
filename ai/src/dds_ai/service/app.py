@@ -26,6 +26,7 @@ from starlette.concurrency import run_in_threadpool
 
 from dds_ai import __version__
 from dds_ai.bridge.compose import compose_scenario
+from dds_ai.bridge.dialogue import dialogue_reply
 from dds_ai.bridge.evaluate import evaluate_card
 from dds_ai.bridge.voice import MAX_AUDIO_BYTES, VoiceService, VoiceUnavailable
 from dds_ai.contracts import CONTRACTS_VERSION, SCHEMA_MODELS
@@ -183,6 +184,14 @@ def create_app(
             return compose_scenario(body, llm)
         except (ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
             raise HTTPException(422, f"bad scenario draft: {exc}") from exc
+
+    @app.post("/v1/dialogue/reply")
+    def dialogue(body: dict[str, Any]) -> dict[str, Any]:
+        # реплика абонента в учебном телефоне: модель формулирует, правила проверяют
+        try:
+            return dialogue_reply(body, llm)
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise HTTPException(422, f"bad dialogue request: {exc}") from exc
 
     @app.get("/v1/voice")
     def voice_caps() -> dict[str, Any]:

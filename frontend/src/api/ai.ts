@@ -32,8 +32,29 @@ async function aiFetch(path: string, init: RequestInit & { timeoutMs?: number } 
   }
 }
 
+/*
+ * Ответ модели читаем под тем же ограничением времени, что и сам запрос: срок жизни
+ * AbortController в aiFetch кончается на заголовках, а тело языковая модель может тянуть
+ * сколько угодно — без этого окно генерации зависает насовсем.
+ */
+async function readJson<T>(res: Promise<Response>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new AiUnavailable(`ИИ-контур молчит дольше ${Math.round(timeoutMs / 1000)} с`)), timeoutMs);
+  });
+  try {
+    const body = await Promise.race([res.then((r) => r.json() as Promise<T>), limit]);
+    return body;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const postJson = (path: string, body: unknown, timeoutMs?: number) =>
   aiFetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), timeoutMs });
+
+/** Сколько ждём языковую модель на один сценарий (на слабом сервере она пишет долго) */
+export const COMPOSE_TIMEOUT_MS = 120_000;
 
 export interface ComposeResult {
   scenario: Scenario;
@@ -41,9 +62,33 @@ export interface ComposeResult {
 }
 
 /** Языковая модель переписывает текст заготовки; эталон и проверки остаются от правил */
-export async function composeScenario(scenario: Scenario, complication: Complication, difficulty: number): Promise<ComposeResult> {
-  const res = await postJson('/v1/scenarios/compose', { scenario, complication, difficulty });
-  return (await res.json()) as ComposeResult;
+export function composeScenario(scenario: Scenario, complication: Complication, difficulty: number): Promise<ComposeResult> {
+  // на слабом сервере модель пишет долго: ждём ограниченное время, иначе остаётся текст шаблона
+  return readJson<ComposeResult>(postJson('/v1/scenarios/compose', { scenario, complication, difficulty }, COMPOSE_TIMEOUT_MS), COMPOSE_TIMEOUT_MS);
+}
+
+/** Сколько ждём реплику абонента: дальше отвечает шаблон */
+const REPLY_TIMEOUT_MS = 10_000;
+
+export interface DialogueReply {
+  reply: string;
+  by: 'llm' | 'template';
+}
+
+/**
+ * Реплика абонента в учебном телефоне: роль, краткая карточка, ход разговора и то,
+ * что сказал обучающийся. Если контур молчит — остаётся шаблон, который фронт прислал сам.
+ */
+export function dialogueReply(req: {
+  role: string;
+  roleKey: 'chief' | 'master' | 'emergency' | 'other';
+  said: string;
+  fallback: string;
+  card: { address: string; incident: string; description: string; victims: boolean };
+  history: { who: 'me' | 'peer'; text: string }[];
+}): Promise<DialogueReply> {
+  // ждать реплику дольше десяти секунд нельзя — это телефонный разговор, а не переписка
+  return readJson<DialogueReply>(postJson('/v1/dialogue/reply', req, REPLY_TIMEOUT_MS), REPLY_TIMEOUT_MS);
 }
 
 export interface Transcript {
@@ -54,13 +99,13 @@ export interface Transcript {
 /** Распознавание речи на сервере (faster-whisper), без облачных сервисов. Тело — сама запись */
 export async function transcribe(audio: Blob, hints: string[] = []): Promise<Transcript> {
   const q = hints.length ? `?hints=${encodeURIComponent(hints.join(','))}` : '';
-  const res = await aiFetch(`/v1/stt${q}`, {
+  const res = aiFetch(`/v1/stt${q}`, {
     method: 'POST',
     headers: { 'Content-Type': audio.type || 'application/octet-stream' },
     body: audio,
     timeoutMs: 60_000,
   });
-  return (await res.json()) as Transcript;
+  return readJson<Transcript>(res, 60_000);
 }
 
 /** Синтез речи на сервере (Piper); ответ — WAV */

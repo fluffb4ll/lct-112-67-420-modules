@@ -28,19 +28,38 @@ export function resolvePeer(number: string, contacts: SoftphoneContact[]): CallP
   return null;
 }
 
-/** Ответ собеседника на доклад обучающегося */
-export function peerReply(peer: CallPeer, number: string, transcript: string, scenario: Scenario | null): string {
+/*
+ * Ответ собеседника на доклад обучающегося.
+ * Пока ИИ-контур не отдаёт наружу диалог, ответ собирается здесь по роли абонента и по тому,
+ * что прозвучало в докладе: адрес, суть происшествия, пострадавшие, повтор уже сказанного.
+ */
+export function peerReply(peer: CallPeer, _number: string, transcript: string, scenario: Scenario | null, said: string[] = []): string {
   const text = transcript.trim();
-  if (!text) return 'Вас не слышно. Перезвоните. Конец связи.';
+  if (!text) return 'Алло, вас не слышно. Перезвоните, пожалуйста.';
+
+  const low = text.toLowerCase();
+  const repeat = said.some((prev) => prev.trim().toLowerCase() === low);
+  const hasAddress = scenario ? matchGroups(text, [scenario.expected.reportMustMention[0] ?? []]).missing.length === 0 : /\d/.test(text);
+  const hasVictims = /пострадав|человек|ребён|ребен|застря|зажат|задым/i.test(text);
+  const short = text.split(/\s+/).filter(Boolean).length < 4;
+
+  if (repeat) return peer.isChief ? 'Это вы мне уже докладывали. Работайте по карточке, о результате доложите отдельно.' : 'Так вы это уже передавали. Мы приняли, работаем.';
+
+  // Руководитель смены и его заместитель: спрашивают недостающее, потом дают указание
   if (peer.isChief) {
-    if (!scenario) return 'Вас понял. Работайте по карточке. Конец связи.';
-    const addressGroup = scenario.expected.reportMustMention[0];
-    const noAddress = addressGroup && matchGroups(text, [addressGroup]).missing.length > 0;
-    return (noAddress ? 'Адрес не назвали — в следующий раз начинайте с адреса. ' : '') + scenario.chiefReply;
+    if (short) return 'Докладывайте подробнее: адрес, что случилось, есть ли пострадавшие.';
+    if (!hasAddress) return 'Адрес назовите полностью — улица, дом, подъезд. С него и начинайте доклад.';
+    const order = scenario?.chiefReply?.trim();
+    const lead = hasVictims ? 'Понял, люди на месте — это в первую очередь. ' : 'Понял вас. ';
+    return lead + (order || 'Принимайте карточку и направляйте бригаду. О выполнении доложите.');
   }
-  const d = DIRECTORY.find((x) => x.number === number);
-  if (d) return d.reply.split('.').slice(1).join('.').trim() || 'Принято. Конец связи.';
-  return 'Вас понял, передам. Конец связи.';
+
+  // Мастер участка и аварийная служба: принимают заявку и говорят, что будут делать
+  const isEmergency = /аварийн|бригад|дежурн/i.test(peer.title);
+  if (short) return isEmergency ? 'Не понял, повторите: адрес и что произошло.' : 'Поподробнее, пожалуйста: куда ехать и что там?';
+  if (!hasAddress) return isEmergency ? 'Адрес уточните, по нему и выезжаем.' : 'Адрес не расслышал, назовите ещё раз.';
+  if (hasVictims) return isEmergency ? 'Принял, люди внутри — выезжаем немедленно, о прибытии доложу.' : 'Принял, раз там люди — отправляю бригаду сейчас же, доложу с места.';
+  return isEmergency ? 'Заявку принял, бригада выезжает. Как прибудем — доложу.' : 'Принял, направляю рабочих. О ходе работ сообщу.';
 }
 
 export interface Hint {

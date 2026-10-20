@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useDb } from '../api/db';
 import { SKILL_LABELS } from '../domain/skills';
-import type { CardResult } from '../store/training';
+import { useRun, type CardResult } from '../store/training';
 import { cx } from '../ui/cx';
 
 /*
@@ -14,6 +14,7 @@ const orangeBtn = 'h-10 border border-arm-orange bg-white px-4 text-[15px] text-
 
 export function ResultModal({ result, isLast, onNext }: { result: CardResult; isLast: boolean; onNext: () => void }) {
   const [showRef, setShowRef] = useState(false);
+  const missed = useRun((s) => s.missedCalls);
   const scenarios = useDb((s) => s.db.scenarios);
   const ev = result.evaluation;
   const sc = result.scenario;
@@ -61,6 +62,12 @@ export function ResultModal({ result, isLast, onNext }: { result: CardResult; is
           <Metric label="скорость набора" value={ev.cpm === null ? '—' : `${ev.cpm}`} sub="знаков в минуту" />
           <Metric label="прогноз до попытки" value={`${Math.round(ev.predicted * 100)}%`} sub={ev.passed === ev.predicted >= 0.5 ? 'сбылся' : 'не сбылся'} />
         </div>
+
+        {missed > 0 && (
+          <div className="mt-3 border-l-4 border-arm-orange bg-arm-block px-3 py-2 text-[13px]">
+            Пропущено входящих вызовов: <b>{missed}</b>. Доклады бригады приходят звонком — трубку нужно снимать, иначе сведения о ходе работ теряются.
+          </div>
+        )}
 
         <table className="mt-3 w-full text-[13px]">
           <thead>

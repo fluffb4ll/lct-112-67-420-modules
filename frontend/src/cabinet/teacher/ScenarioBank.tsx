@@ -15,6 +15,7 @@ import {
   type ScenarioRow,
 } from '../../api/scenarios';
 import { navigate } from '../../app/router';
+import type { Scenario } from '../../domain/types';
 import { ddmmyyyy } from '../../domain/format';
 import { useMe } from '../../store/session';
 import { Badge, Button, Checkbox, Empty, Input, Modal, Notice, Panel, Select, Table, Tabs } from '../../ui';
@@ -52,6 +53,9 @@ export function ScenarioBank() {
   const [categories, setCategories] = useState<IncidentCategory[] | null>(null);
   const [gen, setGen] = useState(false);
   const [msg, setMsg] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null);
+  // генерация идёт в фоне: окно закрывается сразу, карточки появляются по мере готовности
+  const [working, setWorking] = useState('');
+  const stop = useRef(false);
 
   const canEdit = !!info?.permissions.includes(PERMISSION_EDIT_SCENARIOS);
 
@@ -112,6 +116,14 @@ export function ScenarioBank() {
       </div>
 
       {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+      {working && (
+        <Notice tone="neutral">
+          {working} Можно продолжать работать — карточки появятся в списке сами.
+          <button className="ml-2 underline" onClick={() => (stop.current = true)}>
+            остановить
+          </button>
+        </Notice>
+      )}
       {!canEdit && data !== null && <Notice tone="warn">У вашей роли нет права на работу со сценариями (TEACHER_CAN_EDIT_SCENARIOS) — банк доступен только для просмотра.</Notice>}
       {data === null && (
         <Notice tone="warn">
@@ -191,22 +203,52 @@ export function ScenarioBank() {
           categories={categories}
           authorId={user.id}
           onClose={() => setGen(false)}
-          onDone={(n, failed, byTemplate) => {
+          onStart={(items, categoryId, difficulty) => {
             setGen(false);
             setFilter('DRAFT');
             setPage(0);
-            setMsg(
-              failed
-                ? { tone: 'bad', text: `Сохранено черновиков: ${n}. Не удалось сохранить: ${failed}.` }
-                : {
-                    tone: 'ok',
-                    text:
-                      `Сгенерировано черновиков: ${n}` +
-                      (byTemplate ? ` (для ${byTemplate} ИИ-контур не ответил — текст из шаблона классификатора)` : ', текст написан ИИ') +
-                      '. Проверьте эталон и утвердите — после этого сценарии попадут в общий банк.',
+            stop.current = false;
+            void (async () => {
+              let saved = 0;
+              let failed = 0;
+              let byTemplate = 0;
+              for (const [i, { draft, comp }] of items.entries()) {
+                if (stop.current) break;
+                setWorking(`ИИ пишет карточку ${i + 1} из ${items.length}…`);
+                const sc = await composeScenario(draft, comp, difficulty).then(
+                  (r) => {
+                    if (r.by === 'llm') return { ...r.scenario, origin: 'generated' as const };
+                    byTemplate++;
+                    return { ...r.scenario, origin: 'teacher' as const };
                   },
-            );
-            void reload();
+                  () => {
+                    byTemplate++;
+                    return { ...draft, origin: 'teacher' as const };
+                  },
+                );
+                if (stop.current) break;
+                try {
+                  setWorking(`сохраняю карточку ${i + 1} из ${items.length}…`);
+                  const { scenarioId } = await createScenarioOnServer(toBody(sc, categoryId));
+                  mutate((d) => d.scenarios.unshift({ ...sc, id: scenarioId }));
+                  saved++;
+                } catch (e) {
+                  failed++;
+                  setMsg({ tone: 'bad', text: describeError(e, 'Не удалось сохранить сценарий') });
+                }
+                void reload();
+              }
+              setWorking('');
+              if (saved) {
+                setMsg({
+                  tone: failed ? 'bad' : 'ok',
+                  text:
+                    `Готово: ${saved} черновик(ов)` +
+                    (byTemplate ? `, из них ${byTemplate} с текстом заготовки — модель не успела` : ' — текст написала модель') +
+                    (failed ? `. Не удалось сохранить: ${failed}.` : '.'),
+                });
+              }
+            })();
           }}
         />
       )}
@@ -218,30 +260,21 @@ function GenerateModal({
   categories,
   authorId,
   onClose,
-  onDone,
+  onStart,
 }: {
   categories: IncidentCategory[] | null;
   authorId: string;
   onClose: () => void;
-  onDone: (saved: number, failed: number, byTemplate: number) => void;
+  onStart: (items: { draft: Scenario; comp: Complication }[], categoryId: number, difficulty: 1 | 2 | 3) => void;
 }) {
   const [c, setC] = useState<Classifier | null>(null);
   const [group, setGroup] = useState('');
   const [categoryId, setCategoryId] = useState<number | ''>('');
   const [difficulty, setDifficulty] = useState<1 | 2 | 3>(2);
-  const [count, setCount] = useState(3);
-  const [comps, setComps] = useState<Complication[]>(['none', 'zone']);
-  const [busy, setBusy] = useState(false);
+  const [count, setCount] = useState(1);
+  const [comp, setComp] = useState<Complication>('progress');
+  const [mix, setMix] = useState(false);
   const [err, setErr] = useState('');
-  const [progress, setProgress] = useState('');
-  // окно закрыли посреди генерации — оставшиеся сценарии не пишем и не сохраняем
-  const closed = useRef(false);
-  useEffect(
-    () => () => {
-      closed.current = true;
-    },
-    [],
-  );
 
   useEffect(() => {
     let alive = true;
@@ -257,50 +290,27 @@ function GenerateModal({
   }, []);
 
   const groups = c ? upravaGroups(c) : [];
-  // пока преподаватель не выбрал категорию — первая из справочника
-  const chosen = categoryId === '' ? (categories?.[0]?.id ?? '') : categoryId;
+  // пока преподаватель не выбрал категорию — подбираем по группе классификатора («ЛИФТ» → «Лифт»),
+  // и только если совпадения нет, берём первую из справочника
+  const suggested = (() => {
+    if (!categories?.length) return '' as const;
+    const g = group.toLowerCase();
+    const hit = categories.find((x) => g.includes(x.name.toLowerCase()) || x.name.toLowerCase().includes(g.split(/[ ,(-]/)[0]));
+    return (hit ?? categories[0]).id;
+  })();
+  const chosen = categoryId === '' ? suggested : categoryId;
 
-  const run = async () => {
+  const run = () => {
     if (!c || chosen === '') return;
-    setBusy(true);
     setErr('');
-    const list = generateScenarios(c, { group, difficulty, complications: comps, count, authorId });
-    let saved = 0;
-    let failed = 0;
-    let byTemplate = 0;
-    for (const [i, draft] of list.entries()) {
-      if (closed.current) break;
-      setProgress(`ИИ пишет сценарий ${i + 1} из ${list.length}…`);
-      // текст пишет языковая модель ИИ-контура; контур недоступен — остаётся текст шаблона.
-      // Пометка «Сгенерирован ИИ» — только если текст действительно написала модель
-      const comp = (comps.length ? comps : (['none'] as Complication[]))[i % Math.max(comps.length, 1)];
-      const sc = await composeScenario(draft, comp, difficulty).then(
-        (r) => {
-          if (r.by === 'llm') return { ...r.scenario, origin: 'generated' as const };
-          byTemplate++;
-          return { ...r.scenario, origin: 'teacher' as const };
-        },
-        () => {
-          byTemplate++;
-          return { ...draft, origin: 'teacher' as const };
-        },
-      );
-      if (closed.current) break;
-      try {
-        const { scenarioId } = await createScenarioOnServer(toBody(sc, chosen));
-        // зеркалим в локальные данные: занятия и тренажёр пока работают на них
-        mutate((d) => d.scenarios.unshift({ ...sc, id: scenarioId }));
-        saved++;
-      } catch (e) {
-        failed++;
-        setErr(describeError(e, 'Не удалось сохранить сценарий'));
-      }
+    try {
+      const comps: Complication[] = mix ? (Object.keys(COMPLICATION_LABELS) as Complication[]) : [comp];
+      const list = generateScenarios(c, { group, difficulty, complications: comps, count, authorId });
+      const items = list.map((draft, i) => ({ draft, comp: comps[i % comps.length] }));
+      onStart(items, chosen, difficulty);
+    } catch (e) {
+      setErr(`Не удалось собрать заготовку: ${e instanceof Error ? e.message : String(e)}`);
     }
-    if (!closed.current) {
-      setBusy(false);
-      setProgress('');
-    }
-    if (saved) onDone(saved, failed, byTemplate);
   };
 
   return (
@@ -310,8 +320,8 @@ function GenerateModal({
       footer={
         <>
           <Button onClick={onClose}>Отмена</Button>
-          <Button variant="primary" disabled={!c || !group || chosen === '' || busy} onClick={() => void run()}>
-            {busy ? progress || 'Генерация…' : 'Сгенерировать'}
+          <Button variant="primary" disabled={!c || !group || chosen === ''} onClick={run}>
+            Сгенерировать
           </Button>
         </>
       }
@@ -351,16 +361,24 @@ function GenerateModal({
           </Select>
           <Input label="Количество" type="number" min={1} max={6} value={count} onChange={(e) => setCount(Math.max(1, Math.min(6, Number(e.target.value) || 1)))} />
         </div>
-        <div>
-          <div className="mb-1.5 text-[13px] font-medium">Осложняющие факторы</div>
-          <div className="flex flex-col gap-1.5">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Select label="Ход сценария" value={comp} onChange={(e) => setComp(e.target.value as Complication)} disabled={mix}>
             {(Object.keys(COMPLICATION_LABELS) as Complication[]).map((k) => (
-              <Checkbox key={k} checked={comps.includes(k)} onChange={(v) => setComps(v ? [...comps, k] : comps.filter((x) => x !== k))}>
+              <option key={k} value={k}>
                 {COMPLICATION_LABELS[k]}
-              </Checkbox>
+              </option>
             ))}
+          </Select>
+          <div className="self-end pb-1.5">
+            <Checkbox checked={mix} onChange={setMix}>
+              вперемешку (для пачки карточек)
+            </Checkbox>
           </div>
         </div>
+        <Notice tone="neutral">
+          «Полный ход работ» — длинный сценарий: обучающийся принимает карточку, вызывает бригаду по телефону и принимает от неё доклады до закрытия. Остальные варианты короткие: отказ, дубль, чужая
+          зона.
+        </Notice>
       </div>
     </Modal>
   );

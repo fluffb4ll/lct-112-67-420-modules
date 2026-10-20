@@ -1,4 +1,4 @@
-import { COMMENT_REQUIRED, PRIMARY } from './statusMachine';
+import { COMMENT_REQUIRED, PRIMARY, TERMINAL } from './statusMachine';
 import { SKILL_ADVICE, SKILL_LABELS } from './skills';
 import { cpm, literacyIssues, matchGroups } from './text';
 import type { Evaluation, EvaluationCheck, ResponseStatus, Scenario, Skill, TrainingEvent } from './types';
@@ -115,7 +115,9 @@ export function evaluateDds(
   {
     const max = 15;
     const common = lcs(path, exp.path);
-    const extra = path.filter((s) => !exp.path.includes(s));
+    // карточку нельзя закрыть без завершающего статуса, поэтому он не считается лишним,
+    // даже если короткий эталон до него не доходит
+    const extra = path.filter((s) => !exp.path.includes(s) && !TERMINAL.includes(s));
     let points = Math.round((common / exp.path.length) * max);
     if (extra.length) points = Math.max(0, points - 5);
     const detail =
@@ -165,7 +167,8 @@ export function evaluateDds(
   // 8. Грамотность
   {
     const max = 5;
-    const issues = comments.flatMap((c) => literacyIssues(c));
+    // одинаковые замечания по разным комментариям не повторяем
+    const issues = [...new Map(comments.flatMap((c) => literacyIssues(c)).map((i) => [i.message, i])).values()];
     const points = !comments.length ? max : issues.length === 0 ? max : issues.length === 1 ? 3 : 1;
     const detail = !comments.length ? 'Комментариев нет' : issues.length ? issues.map((i) => i.message).join('; ') : 'Замечаний нет';
     checks.push({ id: 'literacy', title: 'Грамотность комментариев', ok: points === max, points, max, detail, skill: 'literacy' });
