@@ -201,11 +201,16 @@ export function Softphone() {
     let transcript = (textMode ? typed : heard).trim();
     if (!textMode && stt.mode === 'server') {
       if (rec?.blob) setRecognizing(true);
-      // распознавание — наша задержка, а не время обучающегося: таймер карточки на паузе
-      useRun.getState().pauseClock(true);
+      // распознавание — наша задержка, а не время обучающегося: таймер карточки на паузе.
+      // Снимать её надо при любом исходе, иначе сбой распознавания остановит таймер навсегда
       const hints = sttHints(run.current?.scenario.incident);
-      const text = await serverTranscript(rec?.blob, (blob) => recognize(blob, hints));
-      useRun.getState().pauseClock(false);
+      let text: string | null;
+      useRun.getState().pauseClock(true);
+      try {
+        text = await serverTranscript(rec?.blob, (blob) => recognize(blob, hints));
+      } finally {
+        useRun.getState().pauseClock(false);
+      }
       if (alive.current) setRecognizing(false);
       if (!live()) return; // звонок сброшен, пока распознавали
       if (!text) {
