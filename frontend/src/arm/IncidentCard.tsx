@@ -217,12 +217,19 @@ function TopBar({ incident, phoneLabel, inCall, incomingFrom, onPhone }: { incid
         onClick={onPhone}
         data-step="softphone"
         className={cx(
-          'flex w-[280px] shrink-0 text-left hover:brightness-[0.97]',
+          'group relative flex w-[280px] shrink-0 text-left hover:brightness-[0.97]',
           incomingFrom ? 'animate-pulse bg-[#d7f0dd] ring-2 ring-[#2e8b4e] ring-inset' : 'bg-arm-block',
           inCall && !incomingFrom && 'ring-2 ring-[#3aa35c] ring-inset',
         )}
-        title={incomingFrom ? `Входящий вызов: ${incomingFrom}` : 'Телефон (учебный софтфон)'}
       >
+        <Tip
+          text={
+            incomingFrom
+              ? `Входящий вызов: ${incomingFrom}. Нажмите, чтобы открыть управление звонком и снять трубку.`
+              : 'Телефон. «Отключение» значит, что трубка положена. Нажмите, чтобы открыть управление звонком: набрать номер или позвонить по быстрому набору.'
+          }
+          below
+        />
         <span className={cx('flex w-16 items-center justify-center', incomingFrom || inCall ? 'text-[#2e8b4e]' : 'text-arm-text')}>
           {incomingFrom || inCall ? <IcPhone size={26} /> : <IcHangup size={30} />}
         </span>

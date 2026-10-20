@@ -34,6 +34,8 @@ export function evaluateDds(
   predicted: number,
   pickNext: (skill: Skill) => string | undefined,
   chiefContactIds: string[],
+  /** Время, пока карточка стояла на паузе (распознавание речи): в норматив не идёт */
+  pausedMs = 0,
 ): Evaluation {
   const exp = scenario.expected;
   const opened = events.find((e) => e.kind === 'opened');
@@ -44,7 +46,7 @@ export function evaluateDds(
   const lastT = finished?.t ?? events[events.length - 1]?.t ?? 0;
   const openSec = opened ? opened.t / 1000 : null;
   const primarySec = firstPrimary ? firstPrimary.t / 1000 : null;
-  const totalSec = lastT / 1000;
+  const totalSec = Math.max(0, lastT - pausedMs) / 1000;
   const comments = sets.map((e) => e.comment ?? '').filter(Boolean);
   const allComments = comments.join(' ');
 

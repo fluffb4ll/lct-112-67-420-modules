@@ -186,8 +186,10 @@ export function Softphone() {
     let transcript = (textMode ? typed : heard).trim();
     if (!textMode && serverStt.current && rec?.blob) {
       setRecognizing(true);
+      useRun.getState().pauseClock(true);
       const a = run.current?.scenario.incident.address;
       const text = await recognize(rec.blob, a ? [a.street, a.house].filter(Boolean) : []);
+      useRun.getState().pauseClock(false);
       if (alive.current) setRecognizing(false);
       if (!live()) return; // звонок сброшен, пока распознавали
       if (!text) {
@@ -262,7 +264,11 @@ export function Softphone() {
 
   // Оформление — по окну «Управление звонком» из инструкции оператора 112
   return (
-    <div className="absolute top-[74px] left-2 z-30 w-[400px] bg-arm-sub text-[13px] text-white shadow-[0_2px_12px_rgba(0,0,0,0.45)]">
+    <>
+      {/* пока идёт распознавание, карточка закрыта: в это время диспетчер говорит по телефону,
+          а не правит статусы, и само распознавание ему в норматив не идёт */}
+      {recognizing && <div className="fixed inset-0 z-20 cursor-wait bg-[#2f353a]/30" aria-hidden />}
+      <div className="absolute top-[74px] left-2 z-30 w-[400px] bg-arm-sub text-[13px] text-white shadow-[0_2px_12px_rgba(0,0,0,0.45)]">
       <div className="flex items-start justify-between px-4 pt-3 pb-2">
         <span className="text-[20px] font-bold">Управление звонком</span>
         <button onClick={() => sp.setOpen(false)} aria-label="Свернуть" className="mt-1 text-white hover:text-[#cfd5d9]">
@@ -407,6 +413,7 @@ export function Softphone() {
           {sp.phase === 'reply' && <div className="mt-2 text-[#dfe3e6]">абонент отвечает…</div>}
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }

@@ -89,6 +89,14 @@ interface RunState {
   fromServer: boolean;
   /** Ошибка отправки карточки на сервер — показывается в разборе */
   sendError: string | null;
+  /**
+   * Сколько времени карточка простояла на паузе. Пока сервер распознаёт доклад, обучающийся
+   * ничего сделать не может, и это время не его: оно не идёт ни в таймер, ни в норматив.
+   */
+  pausedMs: number;
+  pausedAt: number | null;
+  /** Включить и выключить паузу (распознавание речи) */
+  pauseClock: (on: boolean) => void;
 
   start: (p: {
     user: User;
@@ -212,6 +220,8 @@ const initial = {
   heldReports: [],
   fromServer: false,
   sendError: null,
+  pausedMs: 0,
+  pausedAt: null,
 };
 
 export const useRun = create<RunState>((set, get) => {
@@ -312,6 +322,8 @@ export const useRun = create<RunState>((set, get) => {
       journal: [incident, ...context, ...s.journal],
       current: { scenario, incidentId, attemptId: newId('a'), arrivedAt: now, predicted },
       events: [{ t: 0, kind: 'arrived' }],
+      pausedMs: 0,
+      pausedAt: null,
       inputs: [],
       manualHints: [],
       demo: s.mode === 'demo' ? scenario.demo ?? deriveDemo(scenario) : [],
@@ -472,6 +484,8 @@ export const useRun = create<RunState>((set, get) => {
       push({ kind: 'finished' });
       const events = get().events;
       const cur = { ...s.current, finishedAt: Date.now() };
+      // пауза на распознавание речи — не время обучающегося
+      const paused = s.pausedMs + (s.pausedAt === null ? 0 : Date.now() - s.pausedAt);
       clearTimers();
 
       if (s.kind === 'record') {
@@ -490,6 +504,7 @@ export const useRun = create<RunState>((set, get) => {
         cur.predicted,
         (skill) => pickNext(s.user!, skill, s.service.kind, cur.scenario.id),
         chiefIds,
+        paused,
       );
       saveAttempt({
         id: cur.attemptId,
@@ -511,7 +526,7 @@ export const useRun = create<RunState>((set, get) => {
             .map((e) => e.transcript ?? '')
             .filter(Boolean)
             .join(' ');
-          const durationSeconds = Math.round((cur.finishedAt - cur.arrivedAt) / 1000);
+          const durationSeconds = Math.round((cur.finishedAt - cur.arrivedAt - paused) / 1000);
           void submitCard({
             sessionId: s.sessionId,
             scenarioId: cur.scenario.id,
@@ -551,6 +566,15 @@ export const useRun = create<RunState>((set, get) => {
       const u = get().user;
       if (u) clearLive(u.id);
       set({ ...initial });
+    },
+
+    pauseClock: (on) => {
+      const s = get();
+      if (on) {
+        if (s.pausedAt === null) set({ pausedAt: Date.now() });
+        return;
+      }
+      if (s.pausedAt !== null) set({ pausedMs: s.pausedMs + (Date.now() - s.pausedAt), pausedAt: null });
     },
 
     markRead: () => set({ unread: 0 }),

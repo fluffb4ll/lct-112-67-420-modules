@@ -55,7 +55,9 @@ export function TrainingBar({
   const end = cur?.finishedAt ?? now;
   const opened = run.events.find((e) => e.kind === 'opened');
   const openSec = cur ? (opened ? opened.t : end - cur.arrivedAt) / 1000 : 0;
-  const totalSec = cur ? (end - cur.arrivedAt) / 1000 : 0;
+  // пока сервер распознаёт доклад, обучающийся ничего не может сделать — таймер стоит
+  const paused = run.pausedMs + (run.pausedAt === null ? 0 : now - run.pausedAt);
+  const totalSec = cur ? Math.max(0, end - cur.arrivedAt - paused) / 1000 : 0;
   const isRecord = run.kind === 'record';
   const active = !!cur && !cur.finishedAt;
   // завершить можно только открытую карточку — иначе оценивать нечего
