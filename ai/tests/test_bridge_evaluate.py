@@ -142,6 +142,15 @@ def test_wrong_status_is_failed_and_explained():
     assert "незачёт" in out["aiRecommendations"]
 
 
+def test_terminal_status_outside_expected_path_is_extra():
+    """Как на фронте (domain/evaluate.ts): итоговый статус вне эталона — тоже лишний, −5."""
+    events = run(GOOD)
+    events.insert(3, {"t": 50_000, "kind": "status_set", "status": "Работы завершены"})
+    path = next(c for c in evaluate_card(request(events), None)["checks"] if c["id"] == "path")
+    assert path["points"] == 10
+    assert "Лишние статусы: «Работы завершены»" in path["detail"]
+
+
 def judge(comment_score, facts=()):
     """Судья-заглушка; `facts` — ответы по фактам доклада: (номер, цитата, прозвучал ли)."""
     return FakeLLM(

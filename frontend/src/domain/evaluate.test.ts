@@ -130,3 +130,24 @@ describe('рекомендация', () => {
     expect(ev.checks.find((c) => c.id === 'comment_content')!.skill).toBe('refusal_comment');
   });
 });
+
+describe('статусы хода реагирования — как в ai (bridge/rules.py)', () => {
+  const withFinal = (expectedPath: Scenario['expected']['path']) => {
+    const events = run('Докладываю: Кировоградская, 22 — застревание в лифте');
+    events.splice(3, 0, { t: 30000, kind: 'status_set', status: 'Работы завершены' as TrainingEvent['status'] });
+    const scenario: Scenario = { ...lift, expected: { ...lift.expected, path: expectedPath } };
+    return evaluate(events, scenario).checks.find((c) => c.id === 'path')!;
+  };
+
+  it('итоговый статус вне эталона — лишний, минус 5 (тест-зеркало в ai: test_terminal_status_outside_expected_path_is_extra)', () => {
+    const path = withFinal(['Не принята']);
+    expect(path.points).toBe(10);
+    expect(path.detail).toContain('Лишние статусы: «Работы завершены»');
+  });
+
+  it('итоговый статус в эталоне — полный балл', () => {
+    const path = withFinal(['Не принята', 'Работы завершены']);
+    expect(path.points).toBe(15);
+    expect(path.detail).not.toContain('Лишние');
+  });
+});

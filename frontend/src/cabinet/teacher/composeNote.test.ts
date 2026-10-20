@@ -92,3 +92,89 @@ describe('noticesAfterLoad — сообщения банка после пере
     expect(noticesAfterLoad(failed, undefined)).toEqual({ load: null, generate: limit });
   });
 });
+
+describe('composeAndSave — модель и причина шаблона в итоге', () => {
+  const model = (name: string) => ({ component: 'llm', model_name: name, model_version: '1' });
+  const go = (results: ((d: Scenario) => Promise<ComposeResult>)[], closedAfter?: number) => {
+    const saving: number[] = [];
+    let asked = 0;
+    const out = composeAndSave(drafts.slice(0, results.length), {
+      compose: (d, i) => {
+        asked++;
+        return results[i](d);
+      },
+      save: async () => {},
+      closed: () => closedAfter !== undefined && asked > closedAfter,
+      onSaving: (i) => saving.push(i),
+    });
+    return out.then((o) => ({ o, saving }));
+  };
+
+  it('model — имя модели из первого ответа с текстом от модели', async () => {
+    const { o, saving } = await go([
+      (d) => Promise.resolve({ scenario: d, by: 'llm', model: model('qwen-a') }),
+      (d) => Promise.resolve({ scenario: d, by: 'llm', model: model('qwen-b') }),
+    ]);
+    expect(o).toEqual({ saved: 2, failed: 0, byTemplate: 0, stoppedByLimit: false, model: 'qwen-a' });
+    expect(saving).toEqual([0, 1]);
+  });
+
+  it('ответ модели без model — поле model не заполняется', async () => {
+    const { o } = await go([(d) => Promise.resolve({ scenario: d, by: 'llm' })]);
+    expect(o.model).toBeUndefined();
+  });
+
+  it('шаблон — why из composeFallbackReason, по первому такому сценарию', async () => {
+    const { o } = await go([
+      (d) => Promise.resolve({ scenario: d, by: 'template', model: model('qwen-a'), rejected: ['title', 'description'] }),
+      (d) => Promise.resolve({ scenario: d, by: 'template', model: null }),
+    ]);
+    expect(o.byTemplate).toBe(2);
+    expect(o.model).toBeUndefined();
+    expect(o.why).toBe('модель qwen-a написала текст, но проверка контура его отклонила: название, описание');
+  });
+
+  it('модель не подключена — причина со временем ответа', async () => {
+    const { o } = await go([(d) => Promise.resolve({ scenario: d, by: 'template', model: null })]);
+    expect(o.why).toMatch(/^на сервере не подключена языковая модель — контур работает по правилам \(ответ пришёл за [\d.]+ с\)$/);
+  });
+
+  it('ошибка не по лимиту — её текст в why; не Error — общая фраза', async () => {
+    const err = await go([() => Promise.reject(new AiUnavailable('ИИ-контур ответил 504', 504))]);
+    expect(err.o).toEqual({ saved: 1, failed: 0, byTemplate: 1, stoppedByLimit: false, why: 'ИИ-контур ответил 504' });
+    const odd = await go([() => Promise.reject('boom')]);
+    expect(odd.o.why).toBe('ИИ-контур недоступен');
+  });
+
+  it('onSaving не зовётся после 429 и если окно закрыли, пока шёл запрос', async () => {
+    const limited = await go([(d) => Promise.resolve({ scenario: d, by: 'llm' }), () => Promise.reject(new AiUnavailable('лимит', 429))]);
+    expect(limited.saving).toEqual([0]);
+    const closed = await go([(d) => Promise.resolve({ scenario: d, by: 'llm' })], 0);
+    expect(closed.saving).toEqual([]);
+    expect(closed.o.saved).toBe(0);
+  });
+});
+
+describe('generateMessage — модель и причина шаблона', () => {
+  const o = (over: Partial<GenerateOutcome>): GenerateOutcome => ({ saved: 3, failed: 0, byTemplate: 0, stoppedByLimit: false, ...over });
+
+  it('модель названа, когда весь текст от неё', () => {
+    expect(generateMessage(o({ model: 'qwen-a' }), 3).text).toBe(
+      'Сгенерировано черновиков: 3, текст написала языковая модель qwen-a. Проверьте эталон и утвердите — после этого сценарии попадут в общий банк.',
+    );
+  });
+
+  it('шаблон с причиной — причина в тексте; модель тогда не называется', () => {
+    const m = generateMessage(o({ byTemplate: 1, why: 'нет связи', model: 'qwen-a' }), 3);
+    expect(m.tone).toBe('ok');
+    expect(m.text).toBe(
+      'Сгенерировано черновиков: 3 (для 1 текст из шаблона классификатора: нет связи). Проверьте эталон и утвердите — после этого сценарии попадут в общий банк.',
+    );
+    expect(m.text).not.toContain('qwen-a');
+  });
+
+  it('лимит с шаблоном — причина тоже в сообщении', () => {
+    const m = generateMessage(o({ saved: 2, byTemplate: 1, why: 'нет связи', stoppedByLimit: true }), 4);
+    expect(m.text).toContain('Сохранено черновиков: 2 из 4 (для 1 текст из шаблона классификатора: нет связи).');
+  });
+});

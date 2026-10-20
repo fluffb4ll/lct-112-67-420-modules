@@ -365,8 +365,9 @@ def _apply(
 
     inputs = scenario.get("inputs") or []
     texts = [_text(t, 3, 300) for t in out.get("inputs") or []]
-    same = all(
-        t is not None and _same(t, i.get("text")) for t, i in zip(texts, inputs, strict=False)
+    # совпадение с черновиком — только при том же числе реплик, иначе это отказ по числу
+    same = len(texts) == len(inputs) and all(
+        t is not None and _same(t, i.get("text")) for t, i in zip(texts, inputs, strict=True)
     )
     if inputs and len(texts) == len(inputs) and all(texts) and not same:
         for item, text in zip(inputs, texts, strict=True):
