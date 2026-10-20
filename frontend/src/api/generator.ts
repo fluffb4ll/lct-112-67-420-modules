@@ -1,6 +1,7 @@
 import type { Address, Scenario, ServiceNotification, Skill } from '../domain/types';
 import { OWN_SERVICE_ID } from '../data/scenarios';
 import { newId } from './db';
+import { DEFAULT_TIME_LIMIT } from './scenarios';
 
 /*
  * Генерация сценариев «нейросетью» — мок. На сервере это LLM с промптом из классификатора,
@@ -108,7 +109,16 @@ export function generateScenarios(c: Classifier, p: GenerateParams): Scenario[] 
       sampleReport: `Докладываю: ${houseLabel} — ${t.t.toLowerCase()}. Направляю мастера участка.`,
       explanation: '',
     };
-    let chiefReply = 'Принимайте, мастера на место. Конец связи.';
+    // Ответ руководителя обучающийся слышит один раз и по телефону — он должен быть понятен
+    // сразу, без телеграфного «принимайте, мастера на место»
+    let chiefReply = pick(
+      [
+        'Принято. Карточку берите в работу, мастера участка направляйте на адрес. Конец связи.',
+        'Вас понял. Отрабатывайте сами: принимайте карточку и высылайте мастера участка. Конец связи.',
+        'Понял вас. Принимайте и направляйте мастера на место, по готовности доложите. Конец связи.',
+      ],
+      r,
+    );
     let inputs: Scenario['inputs'] = [];
     let journalContext: Scenario['journalContext'];
 
@@ -188,6 +198,15 @@ export function generateScenarios(c: Classifier, p: GenerateParams): Scenario[] 
 
     expected.explanation = `Сгенерировано по классификатору: тип «${t.t}» (группа «${t.g}»), осложнение — «${COMPLICATION_LABELS[comp].toLowerCase()}». Проверьте эталон перед утверждением.`;
 
+    /*
+     * Норматив отработки считаем от самого сценария. Доклады о ходе работ приходят с
+     * задержкой и приходят звонком: диспетчер ждёт вызова, снимает трубку и слушает — это
+     * время он потратить обязан, и штрафовать за него нельзя. Поэтому к базовому нормативу
+     * добавляется вынужденное ожидание: задержка доклада плюс сам разговор.
+     */
+    const waiting = inputs.reduce((s, i) => s + i.delaySec + (i.via === 'call' ? 25 : 5), 0);
+    const timeLimitSec = Math.ceil((DEFAULT_TIME_LIMIT + waiting) / 10) * 10;
+
     out.push({
       id: newId('sc'),
       // осложнение обучающийся выясняет сам — в названии (видно в списке занятий) его нет,
@@ -200,6 +219,7 @@ export function generateScenarios(c: Classifier, p: GenerateParams): Scenario[] 
       category: t.g,
       status: 'draft',
       origin: 'generated',
+      timeLimitSec,
       authorId: p.authorId,
       createdAt: new Date().toISOString(),
       incident: {
