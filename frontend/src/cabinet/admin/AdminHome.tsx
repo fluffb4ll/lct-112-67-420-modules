@@ -6,6 +6,7 @@ import { IcAudit, IcClipboard, IcGear, IcList, IcShield, IcUsers } from '../../a
 import { CabinetLayout, type NavItem } from '../CabinetLayout';
 import { Audit } from './Audit';
 import { Catalog } from './Catalog';
+import { Departments } from './Departments';
 import { Roles } from './Roles';
 import { Security } from './Security';
 import { System } from './System';
@@ -21,6 +22,7 @@ const SECTIONS: { id: string; label: string; tab: string; icon: NavItem['icon'];
   { id: 'users', label: 'Пользователи', tab: 'пользователи', icon: IcUsers, perms: ['users.manage', 'users.manage_admins'] },
   { id: 'roles', label: 'Роли и права', tab: 'роли', icon: IcClipboard, perms: ['roles.manage', 'users.manage_admins'] },
   { id: 'catalog', label: 'Типы происшествий', tab: 'справочник', icon: IcList, perms: ['users.manage', 'users.manage_admins'] },
+  { id: 'departments', label: 'Подразделения', tab: 'подразделения', icon: IcUsers, perms: ['users.manage', 'users.manage_admins'] },
   { id: 'system', label: 'Система', tab: 'система', icon: IcGear, perms: ['system.services', 'system.monitoring', 'system.backup', 'system.config'] },
   { id: 'security', label: 'Безопасность', tab: 'безопасность', icon: IcShield, perms: ['security.manage'] },
   { id: 'audit', label: 'Журнал аудита', tab: 'аудит', icon: IcAudit, perms: ['audit.view'] },
@@ -40,7 +42,7 @@ export function AdminHome({ section }: { section?: string }) {
 
   return (
     <CabinetLayout nav={nav} active={active?.id ?? ''} title={active?.label ?? 'Администрирование'}>
-      {active && !['users', 'catalog', 'system'].includes(active.id) && (
+      {active && !['users', 'catalog', 'departments', 'system'].includes(active.id) && (
         <div className="mb-4">
           <Notice tone="warn">Раздел пока работает на демонстрационных данных: на сервере для него ещё нет методов (см. docs/backend-api.md).</Notice>
         </div>
@@ -48,6 +50,7 @@ export function AdminHome({ section }: { section?: string }) {
       {!active && <Empty>У вашей роли нет доступных разделов администрирования.</Empty>}
       {active?.id === 'users' && <Users />}
       {active?.id === 'catalog' && <Catalog />}
+      {active?.id === 'departments' && <Departments />}
       {active?.id === 'roles' && <Roles />}
       {active?.id === 'system' && <System />}
       {active?.id === 'security' && <Security />}

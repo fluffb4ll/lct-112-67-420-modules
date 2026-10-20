@@ -236,6 +236,17 @@ public class DatabaseInitializer implements CommandLineRunner {
                 jdbcTemplate.execute("INSERT INTO iam.roles (name, permissions) VALUES ('ROLE_STUDENT', ARRAY[7]);");
             }
 
+            // 17. Seed initial departments if empty.
+            // Коды совпадают с идентификаторами служб на фронте (frontend/src/data/services.ts):
+            // по коду подразделения обучающийся попадает на рабочее место своей ДДС.
+            Integer departmentCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM iam.departments", Integer.class);
+            if (departmentCount == null || departmentCount == 0) {
+                log.info("Seeding initial departments (uprava, gormost, moslift)...");
+                jdbcTemplate.execute("INSERT INTO iam.departments (code, name) VALUES ('upr-chertanovo-yuzhnoe', 'ДДС управы района Чертаново Южное');");
+                jdbcTemplate.execute("INSERT INTO iam.departments (code, name) VALUES ('gormost', 'ДДС ГБУ «Гормост»');");
+                jdbcTemplate.execute("INSERT INTO iam.departments (code, name) VALUES ('moslift', 'ОДС «Мослифт»');");
+            }
+
             log.info("Database schema initialization successfully verified.");
         } catch (Exception e) {
             log.error("Error occurred during database schema initialization: {}", e.getMessage(), e);

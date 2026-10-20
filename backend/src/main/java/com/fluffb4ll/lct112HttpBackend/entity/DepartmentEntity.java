@@ -20,6 +20,13 @@ public class DepartmentEntity {
     @Column(name = "id", nullable = false)
     private UUID id;
 
+    /** Идентификатор генерируется здесь: у колонки есть DEFAULT, но JPA его не использует. */
+    public DepartmentEntity(String code, String name) {
+        this.id = UUID.randomUUID();
+        this.code = code;
+        this.name = name;
+    }
+
     @Setter
     @Column(name = "name", nullable = false, unique = true, length = 150)
     private String name;
