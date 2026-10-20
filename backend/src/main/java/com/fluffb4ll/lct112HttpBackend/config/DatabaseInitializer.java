@@ -236,7 +236,15 @@ public class DatabaseInitializer implements CommandLineRunner {
                 jdbcTemplate.execute("INSERT INTO iam.roles (name, permissions) VALUES ('ROLE_STUDENT', ARRAY[7]);");
             }
 
-            // 17. Seed initial departments if empty.
+            // 17. На стендах, поднятых со старой схемой, department_id мог быть создан NOT NULL:
+            // код разрешает учётную запись без подразделения, поэтому ограничение снимаем.
+            try {
+                jdbcTemplate.execute("ALTER TABLE iam.users ALTER COLUMN department_id DROP NOT NULL;");
+            } catch (Exception e) {
+                log.warn("Column iam.users.department_id left as is: {}", e.getMessage());
+            }
+
+            // 18. Seed initial departments if empty.
             // Коды совпадают с идентификаторами служб на фронте (frontend/src/data/services.ts):
             // по коду подразделения обучающийся попадает на рабочее место своей ДДС.
             Integer departmentCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM iam.departments", Integer.class);

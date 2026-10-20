@@ -361,6 +361,9 @@ function CreateUser({
     if (!RULES.password.test(form.password)) return 'Пароль: не короче 8 символов, обязательно латинские буквы и цифры';
     if (!Number.isInteger(form.roleId) || form.roleId < 0) return 'Укажите роль';
     if (form.roleId === ADMIN_ROLE_ID && !canEditAdmins) return 'Недостаточно прав для создания администратора';
+    // пока подразделений нет, учётную запись заводят без него; как только справочник заполнен —
+    // подразделение обязательно: по его коду обучающийся попадает на рабочее место своей ДДС
+    if (departments && departments.length > 0 && !form.departmentId) return 'Выберите подразделение';
     return null;
   };
 
@@ -415,7 +418,7 @@ function CreateUser({
         </Select>
         {departments && (
           <Select label="Подразделение" value={form.departmentId ?? ''} onChange={(e) => set({ departmentId: e.target.value || null })}>
-            <option value="">без подразделения</option>
+            <option value="">{departments.length ? 'выберите подразделение' : 'без подразделения'}</option>
             {departments.map((d) => (
               <option key={d.id} value={d.id}>
                 {d.name}
