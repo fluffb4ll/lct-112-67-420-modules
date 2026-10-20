@@ -65,14 +65,16 @@ export function TrainingBar({
    * В настоящем АРМ-112 кнопки «завершить карточку» нет: диспетчер закрывает своё участие
    * статусом, а карточка живёт дальше. У нас она означает «сдаю работу», поэтому к ней нужно
    * подвести — иначе обучающийся сидит на отработанной карточке и ждёт разбора, которого не
-   * будет. Подсвечиваем, когда первичный статус проставлен, доклад сделан (если он требуется)
-   * и вводных больше не ждём; карточки, закрытые терминальным статусом, сдаются сами.
+   * будет. Но подсказать не вовремя хуже, чем не подсказать: сдача по ходу работ стоит баллов.
+   * Поэтому зовём сдавать только там, где руками и правда больше нечего делать: после «Не
+   * принята» (этот статус карточку не закрывает) и после «Принята» в сценарии без вводных.
+   * Там, где вводные есть, работа кончается терминальным статусом, а он сдаёт карточку сам.
    */
   const scenario = cur?.scenario;
-  const hasPrimary = run.events.some((e) => e.kind === 'status_set' && (e.status === 'Принята' || e.status === 'Не принята'));
+  const lastStatus = [...run.events].reverse().find((e) => e.kind === 'status_set')?.status;
   const reported = !scenario?.expected.callRequired || run.events.some((e) => e.kind === 'call_ended');
-  const brigadeLeft = (scenario?.inputs.length ?? 0) > run.inputs.filter((i) => i.from !== 'Диспетчерская').length;
-  const nudgeFinish = canFinish && !isRecord && hasPrimary && reported && !brigadeLeft;
+  const done = lastStatus === 'Не принята' || (lastStatus === 'Принята' && !scenario?.inputs.length);
+  const nudgeFinish = canFinish && !isRecord && reported && done;
 
   return (
     <div className="flex h-[56px] shrink-0 items-stretch border-b border-arm-sub bg-arm-dark text-white select-none">
