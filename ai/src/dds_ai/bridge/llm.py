@@ -2,7 +2,8 @@
 
 У `LlamaCppProvider` есть `complete_json` (грамматика под схему). У других провайдеров (фейки в
 тестах) — только `complete`; тогда JSON ищется в тексте ответа. Любой сбой — `None`, вызывающий
-код работает на правилах или шаблоне, а не падает (инвариант 4).
+код работает на правилах или шаблоне, а не падает (инвариант 4). Исключение — `LLMBusy`
+(модель занята другим запросом): его вызывающий код показывает пользователю отдельно.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import logging
 import re
 from typing import Any
 
+from ..llm.errors import LLMBusy
 from ..ports import LLMProvider
 
 log = logging.getLogger(__name__)
@@ -41,6 +43,8 @@ def ask_json(
         if not isinstance(data, dict):
             raise ValueError("model output is not an object")
         return data
+    except LLMBusy:
+        raise
     except Exception as exc:  # модель недоступна, тайм-аут, мусор на выходе
         log.warning("LLM call failed: %s", exc)
         return None

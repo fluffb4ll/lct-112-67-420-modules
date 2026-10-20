@@ -50,7 +50,7 @@ export function peerReply(peer: CallPeer, _number: string, transcript: string, s
 
   const low = text.toLowerCase();
   const repeat = said.some((prev) => prev.trim().toLowerCase() === low);
-  const hasAddress = scenario ? matchGroups(text, [scenario.expected.reportMustMention[0] ?? []]).missing.length === 0 : /\d/.test(text);
+  const hasAddress = scenario ? matchGroups(text, [scenario.expected.reportMustMention[0] ?? []], { fuzzy: true }).missing.length === 0 : /\d/.test(text);
   const hasVictims = /пострадав|человек|ребён|ребен|застря|зажат|задым/i.test(text);
   const short = text.split(/\s+/).filter(Boolean).length < 4;
 
@@ -68,14 +68,16 @@ export function peerReply(peer: CallPeer, _number: string, transcript: string, s
     return 'Информацию принял, заявку зарегистрировали. Дальше это наша зона, работаем сами.';
   }
 
-  // Руководитель смены и его заместитель: спрашивают недостающее, потом дают указание
+  /*
+   * Руководитель смены и его заместитель. Замечание по докладу он делает, но указание даёт в
+   * любом случае: в нём ключ к задаче, и без него обучающийся упирается в тупик.
+   */
   if (peer.isChief) {
     if (short) return 'Докладывайте подробнее: адрес, что случилось, есть ли пострадавшие.';
-    if (wrongAddress && cardAddress) return `Адрес не сходится: у меня в карточке ${cardAddress}. Сверьтесь и доложите ещё раз.`;
-    if (!hasAddress) return 'Адрес назовите полностью — улица, дом, подъезд. С него и начинайте доклад.';
-    const order = scenario?.chiefReply?.trim();
-    const lead = hasVictims ? 'Понял, люди на месте — это в первую очередь. ' : 'Понял вас. ';
-    return lead + (order || 'Принимайте карточку и направляйте бригаду. О выполнении доложите.');
+    const order = scenario?.chiefReply?.trim() || 'Принимайте карточку и направляйте бригаду. О выполнении доложите.';
+    if (wrongAddress && cardAddress) return `Адрес не сходится: у меня в карточке ${cardAddress}. ${order}`;
+    if (!hasAddress) return `Адрес вы не назвали — начинайте доклад с него. ${order}`;
+    return (hasVictims ? 'Понял, люди на месте — это в первую очередь. ' : 'Понял вас. ') + order;
   }
 
   // Мастер участка и аварийная служба: принимают заявку и говорят, что будут делать

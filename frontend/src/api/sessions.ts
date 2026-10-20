@@ -172,11 +172,21 @@ export function listSessions(q: { studyGroupId?: string; teacherId?: string; act
   return apiFetchOptional<PageResponse<SessionDto>>(`/sessions?${p}`);
 }
 
-export const submitCard = (req: SubmitCardRequest) => apiFetch<{ cardId: string }>('/cards/submit', { method: 'POST', body: req });
+/** Бэкенд отвечает `{id}` (OperatorCardController.submitCard); `cardId` — на случай выравнивания с другими create-ответами */
+export async function submitCard(req: SubmitCardRequest): Promise<{ cardId: string }> {
+  const res = await apiFetch<{ id?: string; cardId?: string }>('/cards/submit', { method: 'POST', body: req });
+  const cardId = res?.cardId ?? res?.id;
+  if (!cardId) throw new Error('Сервер принял карточку, но не вернул её номер');
+  return { cardId };
+}
+
+/** Сданная карточка целиком — её показывает преподаватель кнопкой «Работа» */
 export interface CardDetails extends CardSummary {
   submittedCard: SubmittedCard;
   operatorNotes: string | null;
   evaluation: Evaluation | null;
+  /** остальные поля ответа читает serverScore.ts */
+  [key: string]: unknown;
 }
 
 export const getCard = (cardId: string) => apiFetch<CardDetails>(`/cards/${cardId}`);

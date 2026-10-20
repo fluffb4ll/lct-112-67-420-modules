@@ -18,7 +18,6 @@ export interface CreateUserRequest {
   fullName: string;
   roleId: number;
   departmentId: string | null;
-  mustChangePassword: boolean;
 }
 
 export interface UpdateUserRequest {
@@ -88,5 +87,5 @@ export const listDepartments = () => apiFetchOptional<DepartmentDto[]>('/departm
 export const RULES = {
   username: /^[A-Za-z_.\d-]{1,16}$/,
   password: /^(?=.*[A-Za-z])(?=.*\d).{8,}$/,
-  fullName: /^[A-Za-zА-Яа-я ']{1,150}$/,
+  fullName: /^[A-Za-zА-Яа-яЁё '-]{1,150}$/,
 };

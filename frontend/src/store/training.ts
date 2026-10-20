@@ -12,7 +12,6 @@ import { deriveDemo, eventsToDemo, stepMatches } from '../domain/demo';
 import { useSoftphone } from '../training/softphoneStore';
 import { DEFAULT_NORMS, evaluateDds, type Norms } from '../domain/evaluate';
 import { computeRatings, predictSuccess, recommendDifficulty } from '../domain/skills';
-import { TERMINAL } from '../domain/statusMachine';
 import type {
   DdsService,
   DemoStep,
@@ -27,6 +26,7 @@ import type {
   User,
 } from '../domain/types';
 import { blip, chime } from '../training/sounds';
+import { allScenarios } from './serverScenarios';
 
 /*
  * Прогон занятия на эмуляторе АРМ (станция ДДС).
@@ -54,6 +54,14 @@ export interface CardResult {
   scenario: Scenario;
   evaluation: Evaluation | null;
   recordedSteps?: number;
+  /** Карточка серверного занятия: итоговую оценку ставит сервер, локальный разбор — предварительный */
+  fromServer?: boolean;
+  /** id сданной карточки на сервере — по нему опрашивается оценка ИИ */
+  serverCardId?: string;
+  /** карточку не удалось отправить на сервер — текст ошибки */
+  sendFailed?: string;
+  /** порог зачёта занятия — для цвета плашки по серверной оценке */
+  passScore?: number;
 }
 
 interface RunState {
@@ -183,11 +191,12 @@ function backgroundJournal(service: DdsService, now: number): Incident[] {
 
 function pickNext(user: User, skill: Skill, kind: DdsService['kind'], excludeId: string): string | undefined {
   const db = getDb();
-  const map = new Map(db.scenarios.map((s) => [s.id, s]));
+  const scenarios = allScenarios();
+  const map = new Map(scenarios.map((s) => [s.id, s]));
   const ratings = computeRatings(db.attempts.filter((a) => a.studentId === user.id), map);
   const diff = recommendDifficulty(ratings, skill);
   const done = new Set(db.attempts.filter((a) => a.studentId === user.id).map((a) => a.scenarioId));
-  const pool = db.scenarios.filter((s) => s.status === 'approved' && s.serviceKind === kind && s.skills.includes(skill) && s.id !== excludeId);
+  const pool = scenarios.filter((s) => s.status === 'approved' && s.serviceKind === kind && s.skills.includes(skill) && s.id !== excludeId);
   const ranked = [...pool].sort((a, b) => Number(done.has(a.id)) - Number(done.has(b.id)) || Math.abs(a.difficulty - diff) - Math.abs(b.difficulty - diff));
   return ranked[0]?.id;
 }
@@ -294,7 +303,8 @@ export const useRun = create<RunState>((set, get) => {
   function arrive() {
     const s = get();
     const db = getDb();
-    const tpl = db.scenarios.find((x) => x.id === s.queue[s.index]);
+    const scenarios = allScenarios();
+    const tpl = scenarios.find((x) => x.id === s.queue[s.index]);
     if (!tpl || !s.user) {
       set({ finishedAll: true });
       return;
@@ -316,7 +326,7 @@ export const useRun = create<RunState>((set, get) => {
     }
     const incidentId = allocIncidentId();
     const incident = materialize(scenario.incident, incidentId, now, s.service);
-    const map = new Map(db.scenarios.map((x) => [x.id, x]));
+    const map = new Map(scenarios.map((x) => [x.id, x]));
     const predicted = predictSuccess(computeRatings(db.attempts.filter((a) => a.studentId === s.user!.id), map), scenario);
     set({
       journal: [incident, ...context, ...s.journal],
@@ -426,7 +436,7 @@ export const useRun = create<RunState>((set, get) => {
           blip();
         }, input.delaySec * 1000);
       }
-      if (TERMINAL.includes(st.status)) later(() => get().finishCard(), 1200);
+      // итоговый статус карточку не закрывает: после него — доклад руководителю, затем «Завершить карточку»
     },
 
     callStarted: (contactId) => {
@@ -517,11 +527,15 @@ export const useRun = create<RunState>((set, get) => {
         finishedAt: iso(cur.finishedAt),
         events,
         evaluation,
+        passScore: s.norms.passScore,
       });
       // занятие с сервера: отправляем заполненную карточку на оценку
+      const serverSession = !!(s.fromServer && s.sessionId);
+      let sendFailed: string | undefined;
       if (s.fromServer && s.sessionId) {
         const inc = get().journal.find((i) => i.id === cur.incidentId);
-        if (inc) {
+        if (!inc) sendFailed = 'Карточка не попала в журнал и не отправлена на сервер';
+        else {
           const report = events
             .map((e) => e.transcript ?? '')
             .filter(Boolean)
@@ -539,12 +553,26 @@ export const useRun = create<RunState>((set, get) => {
             submittedAt: iso(cur.finishedAt),
             durationSeconds,
             timeDeltaSeconds: durationSeconds - s.norms.totalSec,
-          }).catch((e: unknown) => set({ sendError: describeError(e, 'Не удалось отправить карточку на сервер') }));
+          })
+            .then(({ cardId }) => {
+              // ответ мог прийти после «следующей карточки» — привязываем к своей попытке
+              const a = getDb().attempts.find((x) => x.id === cur.attemptId);
+              if (a) saveAttempt({ ...a, serverCardId: cardId });
+              const r = get().result;
+              if (r && get().current?.attemptId === cur.attemptId) set({ result: { ...r, serverCardId: cardId } });
+            })
+            .catch((e: unknown) => {
+              const msg = describeError(e, 'Не удалось отправить карточку на сервер');
+              set({ sendError: msg });
+              // разбор этой карточки ещё открыт — показываем в нём, что итоговой оценки не будет
+              const r = get().result;
+              if (r && get().current?.attemptId === cur.attemptId) set({ result: { ...r, sendFailed: msg } });
+            });
         }
       }
       set({
         current: cur,
-        result: { scenario: cur.scenario, evaluation },
+        result: { scenario: cur.scenario, evaluation, fromServer: serverSession, sendFailed, passScore: s.norms.passScore },
         history: [...s.history, { title: cur.scenario.title, score: evaluation.score, passed: evaluation.passed }],
       });
     },

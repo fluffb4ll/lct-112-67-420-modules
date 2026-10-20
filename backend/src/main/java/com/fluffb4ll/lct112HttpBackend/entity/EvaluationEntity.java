@@ -8,6 +8,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -38,6 +39,11 @@ public class EvaluationEntity {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "ai_compliance_errors", columnDefinition = "jsonb")
     private Map<String, Object> aiComplianceErrors;
+
+    /** Проверки регламента от ИИ (skill, points, max) — по ним считаются навыки в аналитике; null у строк старше колонки */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "ai_checks", columnDefinition = "jsonb")
+    private List<Map<String, Object>> aiChecks;
 
     @Column(name = "ai_recommendations", columnDefinition = "text")
     private String aiRecommendations;

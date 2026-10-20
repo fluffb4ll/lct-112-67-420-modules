@@ -21,7 +21,12 @@ import {
 import { listStudyGroups, type StudyGroupRow } from '../../api/teacher';
 import { dateTime } from '../../domain/format';
 import { useMe } from '../../store/session';
+import { CardBadge } from '../shared/CardBadge';
+import { useCardEvaluations } from '../../training/cardEvaluations';
+import { pollUntil } from '../../training/pollUntil';
 import { Badge, Button, Checkbox, ConfirmModal, Empty, Input, Modal, Notice, Panel, Select, Table, Textarea } from '../../ui';
+import { startableGroups } from './groupAccess';
+import { normalizeSessionNumber } from './sessionForm';
 
 /*
  * Занятия — через бэкенд (/api/sessions, ветка mvp).
@@ -175,20 +180,22 @@ export function Sessions() {
 }
 
 function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r: { students: number; cards: number }) => void }) {
+  const { user, role } = useMe();
   const [groups, setGroups] = useState<StudyGroupRow[] | null>(null);
   const [scenarios, setScenarios] = useState<ScenarioRow[] | null>(null);
   const [groupId, setGroupId] = useState('');
   const [picked, setPicked] = useState<string[]>([]);
-  const [count, setCount] = useState(5);
-  const [minSec, setMinSec] = useState(60);
-  const [maxSec, setMaxSec] = useState(180);
+  const [count, setCount] = useState('5');
+  const [minSec, setMinSec] = useState('60');
+  const [maxSec, setMaxSec] = useState('180');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
   useEffect(() => {
     let alive = true;
     void listStudyGroups(0, 100).then(
-      (p) => alive && setGroups(p ? p.content : null),
+      // занятие можно начать только в своей группе; администратору — в любой
+      (p) => alive && setGroups(p ? startableGroups(p.content, { id: user?.id, isAdmin: role?.kind === 'admin' }) : null),
       () => alive && setGroups(null),
     );
     // в занятие идут только утверждённые сценарии
@@ -199,18 +206,24 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
     return () => {
       alive = false;
     };
-  }, []);
+  }, [user?.id, role?.kind]);
 
   const chosenGroup = groupId || groups?.[0]?.id || '';
 
   const submit = async () => {
     if (!chosenGroup) return setErr('Выберите группу');
     if (!picked.length) return setErr('Отметьте хотя бы один сценарий');
-    if (minSec > maxSec) return setErr('Минимальный интервал больше максимального');
+    const countValue = normalizeSessionNumber(count, 1, 50);
+    const minSecValue = normalizeSessionNumber(minSec, 0);
+    const maxSecValue = normalizeSessionNumber(maxSec, 0);
+    setCount(String(countValue));
+    setMinSec(String(minSecValue));
+    setMaxSec(String(maxSecValue));
+    if (minSecValue > maxSecValue) return setErr('Минимальный интервал больше максимального');
     setBusy(true);
     setErr('');
     try {
-      const r = await startSession({ studyGroupId: chosenGroup, scenarioIds: picked, targetCardsCount: count, minIntervalSeconds: minSec, maxIntervalSeconds: maxSec });
+      const r = await startSession({ studyGroupId: chosenGroup, scenarioIds: picked, targetCardsCount: countValue, minIntervalSeconds: minSecValue, maxIntervalSeconds: maxSecValue });
       onStarted({ students: r.totalStudentsAssigned, cards: r.totalCardsAssigned });
     } catch (e) {
       setErr(describeError(e, 'Не удалось начать занятие'));
@@ -227,7 +240,7 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
       footer={
         <>
           <Button onClick={onClose}>Отмена</Button>
-          <Button variant="primary" disabled={busy} onClick={() => void submit()}>
+          <Button variant="primary" disabled={busy || !groups?.length} onClick={() => void submit()}>
             {busy ? 'Запуск…' : 'Начать занятие'}
           </Button>
         </>
@@ -238,6 +251,8 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
 
         {groups === null ? (
           <Notice tone="warn">Сервер не отдаёт учебные группы — занятие назначать некому.</Notice>
+        ) : !groups.length ? (
+          <Notice tone="warn">У вас нет своих учебных групп — создайте группу в разделе «Группы» и зачислите обучающихся.</Notice>
         ) : (
           <Select label="Группа" value={chosenGroup} onChange={(e) => setGroupId(e.target.value)}>
             {groups.map((g) => (
@@ -249,9 +264,31 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
         )}
 
         <div className="grid gap-3 sm:grid-cols-3">
-          <Input label="Карточек на обучающегося" type="number" min={1} max={50} value={count} onChange={(e) => setCount(Math.max(1, Number(e.target.value) || 1))} />
-          <Input label="Интервал от, с" type="number" min={0} value={minSec} onChange={(e) => setMinSec(Math.max(0, Number(e.target.value) || 0))} />
-          <Input label="Интервал до, с" type="number" min={0} value={maxSec} onChange={(e) => setMaxSec(Math.max(0, Number(e.target.value) || 0))} />
+          <Input
+            label="Карточек на обучающегося"
+            type="number"
+            min={1}
+            max={50}
+            value={count}
+            onChange={(e) => setCount(e.target.value)}
+            onBlur={() => setCount(String(normalizeSessionNumber(count, 1, 50)))}
+          />
+          <Input
+            label="Интервал от, с"
+            type="number"
+            min={0}
+            value={minSec}
+            onChange={(e) => setMinSec(e.target.value)}
+            onBlur={() => setMinSec(String(normalizeSessionNumber(minSec, 0)))}
+          />
+          <Input
+            label="Интервал до, с"
+            type="number"
+            min={0}
+            value={maxSec}
+            onChange={(e) => setMaxSec(e.target.value)}
+            onBlur={() => setMaxSec(String(normalizeSessionNumber(maxSec, 0)))}
+          />
         </div>
 
         <div>
@@ -275,11 +312,14 @@ function StartModal({ onClose, onStarted }: { onClose: () => void; onStarted: (r
 }
 
 /** Карточка занятия: сданные работы, оценка ИИ и выставление оценки преподавателем */
-function SessionModal({ id, onClose }: { id: string; onClose: () => void }) {
+/** Сданные работы занятия; studentId — только работы одного обучающегося (мониторинг) */
+export function SessionModal({ id, onClose, studentId }: { id: string; onClose: () => void; studentId?: string }) {
   const [data, setData] = useState<SessionDetails | null>(null);
   const [err, setErr] = useState('');
   const [scoreFor, setScoreFor] = useState<CardSummary | null>(null);
   const [cardFor, setCardFor] = useState<CardSummary | null>(null);
+  const cards = data?.cards.filter((c) => !studentId || c.studentId === studentId);
+  const evals = useCardEvaluations(cards, true);
 
   const load = useCallback(
     () =>
@@ -303,7 +343,7 @@ function SessionModal({ id, onClose }: { id: string; onClose: () => void }) {
 
   return (
     <Modal
-      title={data ? `Занятие: ${data.studyGroupName ?? ''}` : 'Занятие'}
+      title={data ? `Занятие: ${data.studyGroupName ?? ''}${studentId && cards?.[0] ? ` · ${cards[0].studentName ?? ''}` : ''}` : 'Занятие'}
       width={760}
       onClose={onClose}
       footer={
@@ -315,8 +355,8 @@ function SessionModal({ id, onClose }: { id: string; onClose: () => void }) {
       <div className="flex flex-col gap-3">
         {err && <Notice tone="bad">{err}</Notice>}
         {!data && !err && <Notice tone="neutral">Загрузка…</Notice>}
-        {data && !data.cards.length && <Notice tone="neutral">Сданных работ пока нет.</Notice>}
-        {data && !!data.cards.length && (
+        {cards && !cards.length && <Notice tone="neutral">Сданных работ пока нет.</Notice>}
+        {cards && !!cards.length && (
           <Table>
             <thead>
               <tr>
@@ -329,7 +369,7 @@ function SessionModal({ id, onClose }: { id: string; onClose: () => void }) {
               </tr>
             </thead>
             <tbody>
-              {data.cards.map((c) => (
+              {cards.map((c) => (
                 <tr key={c.id}>
                   <td>{c.studentName ?? c.studentId}</td>
                   <td className="text-[13px]">{c.scenarioTitle ?? '—'}</td>
@@ -337,7 +377,7 @@ function SessionModal({ id, onClose }: { id: string; onClose: () => void }) {
                   <td className={`text-[12px] whitespace-nowrap ${(c.timeDeltaSeconds ?? 0) > 0 ? 'text-c-bad' : 'text-c-muted'}`}>
                     {c.timeDeltaSeconds == null ? '—' : c.timeDeltaSeconds > 0 ? `+${c.timeDeltaSeconds} с` : 'в норматив'}
                   </td>
-                  <td>{c.status === 'EVALUATED' ? <Badge tone="ok">оценена</Badge> : <Badge tone="warn">ждёт оценки</Badge>}</td>
+                  <td><CardBadge status={c.status} ev={evals[c.id]} /></td>
                   <td>
                     <div className="flex justify-end gap-1.5">
                       <Button size="sm" variant="ghost" onClick={() => setCardFor(c)}>
@@ -441,6 +481,9 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [aiSlow, setAiSlow] = useState(false);
+  // каждый запрос оценки ИИ запускает опрос заново — даже если статус и так был PENDING
+  const [aiRound, setAiRound] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -448,8 +491,9 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
       (e) => {
         if (!alive) return;
         setEvaluation(e);
-        setScore(e.teacherScore != null ? String(e.teacherScore) : '');
-        setComment(e.teacherComment ?? '');
+        // преподаватель мог начать ввод до ответа сервера — введённое не затираем
+        setScore((s) => s || (e.teacherScore != null ? String(e.teacherScore) : ''));
+        setComment((c) => c || (e.teacherComment ?? ''));
       },
       () => alive && setEvaluation(null),
     );
@@ -458,8 +502,22 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
     };
   }, [card.id]);
 
+  // пока ИИ оценивает — перечитываем оценку с затуханием (pollUntil). Трогаем только её:
+  // оценку и комментарий, которые преподаватель уже вводит, опрос не затирает
+  const pending = evaluation?.aiStatus === 'PENDING';
+  useEffect(() => {
+    if (!pending) return;
+    return pollUntil({
+      load: () => getEvaluation(card.id),
+      isDone: (e) => e.aiStatus !== 'PENDING',
+      onValue: setEvaluation,
+      onGiveUp: () => setAiSlow(true),
+    });
+  }, [card.id, pending, aiRound]);
+
   const save = async () => {
-    const n = Number(score);
+    // пустое поле — не ноль: Number('') дал бы оценку 0
+    const n = score.trim() ? Number(score) : NaN;
     if (!Number.isFinite(n) || n < 0 || n > 100) return setErr('Оценка — число от 0 до 100');
     setBusy(true);
     setErr('');
@@ -478,6 +536,8 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
     setErr('');
     try {
       setEvaluation(await requestAiEvaluation(card.id));
+      setAiSlow(false);
+      setAiRound((n) => n + 1);
     } catch (e) {
       // 503 — ИИ-контур недоступен: показываем текст сервера и перечитываем статус оценки
       if (e instanceof ApiError && e.status === 503) {
@@ -518,7 +578,9 @@ function ScoreModal({ card, onClose, onSaved }: { card: CardSummary; onClose: ()
             {evaluation.aiStatus === 'UNAVAILABLE' && (
               <Notice tone="warn">ИИ-контур недоступен — оценки ИИ нет. Запросите заново позже или выставьте свою.</Notice>
             )}
-            {evaluation.aiStatus === 'PENDING' && <Notice tone="neutral">ИИ оценивает карточку…</Notice>}
+            {evaluation.aiStatus === 'PENDING' && (
+              <Notice tone="neutral">{aiSlow ? 'Оценка ИИ ещё не готова — запросите позже или выставьте свою.' : 'ИИ оценивает карточку…'}</Notice>
+            )}
             <div>
               <b>Оценка ИИ:</b> {evaluation.aiScore ?? '—'}
               {evaluation.finalScore != null && <span className="text-c-muted"> · итог {evaluation.finalScore}</span>}

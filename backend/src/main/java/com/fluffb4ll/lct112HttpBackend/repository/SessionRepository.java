@@ -9,4 +9,5 @@ import java.util.UUID;
 
 @Repository
 public interface SessionRepository extends JpaRepository<SessionEntity, UUID>, JpaSpecificationExecutor<SessionEntity> {
+    boolean existsByStudyGroup_IdAndEndedAtIsNull(UUID studyGroupId);
 }

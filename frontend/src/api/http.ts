@@ -23,6 +23,17 @@ export function setUnauthorizedHandler(fn: () => void) {
   onUnauthorized = fn;
 }
 
+/**
+ * Отказ из-за нехватки прав (сессия жива). Бэкенд отвечает на это 403; старый бэкенд отдавал 401
+ * с «…permission…» в тексте («You do not have required permissions») — его тоже считаем отказом в правах,
+ * а не истёкшей сессией.
+ */
+export function isRightsError(status: number, message: string): boolean {
+  return status === 403 || (status === 401 && /permission/i.test(message));
+}
+
+export const isPermissionDenied = (e: unknown): boolean => e instanceof ApiError && isRightsError(e.status, e.message);
+
 async function errorMessage(res: Response): Promise<string> {
   try {
     const body = (await res.json()) as { errorMessage?: string; message?: string };
@@ -50,9 +61,7 @@ export async function apiFetch<T>(path: string, init: { method?: string; body?: 
 
   if (!res.ok) {
     const message = await errorMessage(res);
-    // 401 бэкенд отдаёт и на нехватку прав («You do not have required permissions») — это не повод сбрасывать сессию
-    const rights = /permission/i.test(message);
-    if (res.status === 401 && !rights && !init.skipAuthRedirect) onUnauthorized?.();
+    if (res.status === 401 && !isRightsError(res.status, message) && !init.skipAuthRedirect) onUnauthorized?.();
     throw new ApiError(res.status, message);
   }
   const text = await res.text();

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { downloadAnalyticsCsv, groupAnalytics, leaderboard, type GroupAnalytics, type LeaderboardEntry } from '../../api/analytics';
 import { describeError } from '../../api/errors';
 import { listStudyGroups, type StudyGroupRow } from '../../api/teacher';
+import { serverSkillBars } from '../../domain/skills';
 import { Badge, Button, Notice, Panel, Select, Stat, Table } from '../../ui';
 import { HBars } from '../../ui/charts';
 
@@ -53,7 +54,7 @@ export function ServerReports() {
 
   if (groups === null && board === null) return null;
 
-  const skills = data?.skillsAverage ? Object.entries(data.skillsAverage) : [];
+  const skills = serverSkillBars(data?.skillsAverage);
 
   const saveCsv = async () => {
     setBusy(true);
@@ -105,7 +106,7 @@ export function ServerReports() {
             {!!skills.length && (
               <div>
                 <div className="mb-1.5 text-[13px] font-medium">Средние по навыкам</div>
-                <HBars items={skills.map(([label, value]) => ({ label, value: Math.round(value) }))} />
+                <HBars items={skills} />
               </div>
             )}
 

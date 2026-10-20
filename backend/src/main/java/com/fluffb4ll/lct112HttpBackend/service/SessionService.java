@@ -11,16 +11,20 @@ import com.fluffb4ll.lct112HttpBackend.model.enums.EntityType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.EventType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.Permissions;
 import com.fluffb4ll.lct112HttpBackend.model.enums.ScenarioStatus;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.SessionConflictException;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.SessionException;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.ScenarioRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.SessionRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.StudyGroupMemberRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.StudyGroupRepository;
+import com.fluffb4ll.lct112HttpBackend.util.AccessUtil;
 import com.fluffb4ll.lct112HttpBackend.util.HttpRequestUtil;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -58,6 +62,13 @@ public class SessionService {
 
         StudyGroupEntity studyGroup = studyGroupRepository.findById(request.studyGroupId())
                 .orElseThrow(() -> new SessionException("Study group not found"));
+        // занятие назначается только своей группе; администратор — любой
+        if (!AccessUtil.canManageGroup(currentUser, studyGroup)) {
+            throw new ForbiddenException("You can start sessions only for your own study groups");
+        }
+        if (sessionRepository.existsByStudyGroup_IdAndEndedAtIsNull(studyGroup.getId())) {
+            throw new SessionConflictException("Для этой группы уже идёт занятие — сначала завершите его");
+        }
 
         List<ScenarioEntity> scenarios = scenarioRepository.findAllById(request.scenarioIds());
         if (scenarios.size() != request.scenarioIds().size()) {
@@ -90,7 +101,13 @@ public class SessionService {
                 minInterval,
                 maxInterval
         );
-        SessionEntity savedSession = sessionRepository.save(session);
+        SessionEntity savedSession;
+        try {
+            // flush сразу: одновременный старт для той же группы упрётся в sessions_one_active_per_group
+            savedSession = sessionRepository.saveAndFlush(session);
+        } catch (DataIntegrityViolationException e) {
+            throw new SessionConflictException("Для этой группы уже идёт занятие — сначала завершите его");
+        }
 
         auditService.logAction(
                 currentUser.getId(),
@@ -125,7 +142,7 @@ public class SessionService {
                     currentUser.getId()
             );
             if (!isMember && !"ROLE_ADMIN".equals(currentUser.getRole().getName())) {
-                throw new AuthenticationException("You are not a member of this session's study group");
+                throw new ForbiddenException("You do not have permission to view this session: not a member of its study group");
             }
         }
 
@@ -242,6 +259,9 @@ public class SessionService {
         SessionEntity session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new SessionException("Session not found"));
 
+        if (!canManageSession(currentUser, session)) {
+            throw new ForbiddenException("You can end only sessions of your own study groups");
+        }
         if (session.getEndedAt() != null) {
             throw new SessionException("Session is already ended");
         }
@@ -278,9 +298,22 @@ public class SessionService {
         SessionEntity session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new SessionException("Session not found"));
 
-        List<OperatorCardEntity> cards = operatorCardRepository.findBySessionId(sessionId);
+        if (isTeacherOrAdmin(currentUser)) {
+            return SessionDetailsDto.fromEntity(session, operatorCardRepository.findBySessionId(sessionId));
+        }
 
-        return SessionDetailsDto.fromEntity(session, cards);
+        // Обучающийся видит занятие своей группы и только собственные карточки
+        boolean isMember = session.getStudyGroup() != null && studyGroupMemberRepository.existsByIdGroupIdAndIdStudentId(
+                session.getStudyGroup().getId(),
+                currentUser.getId()
+        );
+        if (!isMember) {
+            throw new ForbiddenException("You do not have permission to view this session");
+        }
+        List<OperatorCardEntity> ownCards = operatorCardRepository.findBySessionId(sessionId).stream()
+                .filter(c -> c.getStudent() != null && c.getStudent().getId().equals(currentUser.getId()))
+                .toList();
+        return SessionDetailsDto.fromEntity(session, ownCards);
     }
 
     @Transactional
@@ -292,7 +325,7 @@ public class SessionService {
             int page,
             int size
     ) throws AuthenticationException {
-        authService.verifyAuthToken(token, null);
+        UserEntity currentUser = authService.verifyAuthToken(token, null);
 
         int validatedSize = Math.clamp(size, 1, 100);
         int validatedPage = Math.max(page, 0);
@@ -303,11 +336,24 @@ public class SessionService {
                 Sort.by(Sort.Direction.DESC, "startedAt")
         );
 
+        // Обучающемуся — только занятия его групп
+        List<UUID> ownGroupIds = null;
+        if (!isTeacherOrAdmin(currentUser)) {
+            ownGroupIds = studyGroupMemberRepository.findGroupIdsByStudentId(currentUser.getId());
+            if (ownGroupIds.isEmpty()) {
+                return PageResponseDto.from(Page.<SessionDto>empty(pageable));
+            }
+        }
+        List<UUID> allowedGroupIds = ownGroupIds;
+
         Specification<SessionEntity> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
 
             if (studyGroupId != null) {
                 predicates.add(cb.equal(root.get("studyGroup").get("id"), studyGroupId));
+            }
+            if (allowedGroupIds != null) {
+                predicates.add(root.get("studyGroup").get("id").in(allowedGroupIds));
             }
             if (teacherId != null) {
                 predicates.add(cb.equal(root.get("teacher").get("id"), teacherId));
@@ -330,17 +376,30 @@ public class SessionService {
         return scenario != null && (scenario.getStatus() == ScenarioStatus.APPROVED || isSubmitted);
     }
 
+    /** Завершить занятие может администратор, преподаватель, который его начал, или преподаватель группы */
+    private static boolean canManageSession(UserEntity user, SessionEntity session) {
+        if (AccessUtil.isAdmin(user)) return true;
+        boolean startedIt = session.getTeacher() != null && user.getId() != null
+                && user.getId().equals(session.getTeacher().getId());
+        return startedIt || AccessUtil.isTeacherOf(user, session.getStudyGroup());
+    }
+
     private void verifyTeacherOrAdmin(UserEntity user) throws AuthenticationException {
         if (user == null || user.getRole() == null) {
             throw new AuthenticationException("Unauthorized");
         }
+        if (!isTeacherOrAdmin(user)) {
+            throw new ForbiddenException("You do not have permission to manage sessions");
+        }
+    }
+
+    private static boolean isTeacherOrAdmin(UserEntity user) {
+        if (user == null || user.getRole() == null) {
+            return false;
+        }
         String roleName = user.getRole().getName();
-        boolean isTeacherOrAdmin = "ROLE_ADMIN".equals(roleName)
+        return "ROLE_ADMIN".equals(roleName)
                 || "ROLE_TEACHER".equals(roleName)
                 || (user.getRole().getPermissionsAsSet() != null && user.getRole().getPermissionsAsSet().contains(Permissions.TEACHER_CAN_EDIT_SCENARIOS.name()));
-
-        if (!isTeacherOrAdmin) {
-            throw new AuthenticationException("You do not have permission to manage sessions");
-        }
     }
 }
