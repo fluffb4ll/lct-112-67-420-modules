@@ -1,5 +1,6 @@
-import { useDb } from '../../api/db';
-import { useNow } from '../../app/hooks';
+import { useEffect, useState } from 'react';
+import { listScenarios } from '../../api/scenarios';
+import { listSessions } from '../../api/sessions';
 import { IcChart, IcDoc, IcList, IcMonitor, IcUsers } from '../../arm/icons';
 import { useMe } from '../../store/session';
 import { CabinetLayout } from '../CabinetLayout';
@@ -17,17 +18,27 @@ import { Sessions } from './Sessions';
 
 export function TeacherHome({ section = 'bank', param }: { section?: string; param?: string }) {
   const { user } = useMe();
-  const drafts = useDb((s) => s.db.scenarios.filter((x) => x.status === 'draft').length);
-  const liveList = useDb((s) => s.db.live);
-  const now = useNow(30_000);
-  const live = liveList.filter((l) => now - new Date(l.updatedAt).getTime() < 10 * 60_000).length;
+  // бейджи — по серверу: черновики в банке и идущие занятия; перезапрос при смене раздела
+  const [badges, setBadges] = useState<{ drafts?: number; live?: number }>({});
+  const teacherId = user?.id;
+  useEffect(() => {
+    if (!teacherId) return;
+    let alive = true;
+    const count = (p: Promise<{ totalElements: number } | null>) => p.then((r) => r?.totalElements, () => undefined);
+    void Promise.all([count(listScenarios({ status: 'DRAFT', size: 1 })), count(listSessions({ teacherId, activeOnly: true, size: 1 }))]).then(
+      ([drafts, live]) => alive && setBadges({ drafts, live }),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [teacherId, section]);
   if (!user) return null;
 
   const nav = [
-    { id: 'bank', label: 'сценарии', path: '/teacher/bank', badge: drafts, icon: IcDoc },
+    { id: 'bank', label: 'сценарии', path: '/teacher/bank', badge: badges.drafts, icon: IcDoc },
     { id: 'sessions', label: 'занятия', path: '/teacher/sessions', icon: IcList },
     { id: 'groups', label: 'группы', path: '/teacher/groups', icon: IcUsers },
-    { id: 'monitor', label: 'мониторинг', path: '/teacher/monitor', badge: live, icon: IcMonitor },
+    { id: 'monitor', label: 'мониторинг', path: '/teacher/monitor', badge: badges.live, icon: IcMonitor },
     { id: 'reports', label: 'статистика', path: '/teacher/reports', icon: IcChart },
   ];
   const s = ['bank', 'sessions', 'groups', 'monitor', 'reports'].includes(section) ? section : 'bank';

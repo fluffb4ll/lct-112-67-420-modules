@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -36,4 +37,20 @@ public interface UserRepository extends JpaRepository<UserEntity, UUID> {
         LEFT JOIN u.department d
     """)
     Page<UserTableRowDto> findAllForTable(Pageable pageable);
+
+    @Query("""
+        SELECT new com.fluffb4ll.lct112HttpBackend.dto.response.UserTableRowDto(
+            u.id,
+            u.fullName,
+            r.name,
+            d.name,
+            u.active
+        )
+        FROM UserEntity u
+        JOIN u.role r
+        LEFT JOIN u.department d
+        WHERE r.name = :roleName AND u.active = true
+        ORDER BY u.fullName, u.id
+    """)
+    List<UserTableRowDto> findActiveByRoleNameForTable(@Param("roleName") String roleName);
 }

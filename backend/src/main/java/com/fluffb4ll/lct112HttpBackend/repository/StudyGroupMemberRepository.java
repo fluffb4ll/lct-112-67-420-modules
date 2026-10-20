@@ -23,5 +23,8 @@ public interface StudyGroupMemberRepository extends JpaRepository<StudyGroupMemb
 
     boolean existsByIdGroupIdAndIdStudentId(UUID groupId, UUID studentId);
 
+    @Query("SELECT m.id.groupId FROM StudyGroupMemberEntity m WHERE m.id.studentId = :studentId")
+    List<UUID> findGroupIdsByStudentId(@Param("studentId") UUID studentId);
+
     void deleteByIdGroupIdAndIdStudentId(UUID groupId, UUID studentId);
 }

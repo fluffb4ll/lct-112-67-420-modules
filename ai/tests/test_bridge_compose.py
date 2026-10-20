@@ -173,3 +173,118 @@ def test_route(monkeypatch):
     r = client.post("/v1/scenarios/compose", json={"scenario": draft(), "complication": "zone"})
     assert r.status_code == 200 and r.json()["by"] == "llm"
     assert client.post("/v1/scenarios/compose", json={}).status_code == 422
+
+
+def test_draft_echo_is_not_applied():
+    # реальный случай (сценарий b7392178): модель вернула описание шаблона с адресом в конце,
+    # `applied` было с description, а в банк ушёл шаблонный текст «Признаки: …»
+    d = draft("progress")
+    d["title"] = "Застревание в лифте, Кировоградская, 15"
+    d["incident"]["descriptions"][0]["text"] = "Застревание в лифте. Признаки: лифт, застревание."
+    out = compose_scenario(
+        {"scenario": d, "complication": "progress"},
+        answer(
+            title="Застревание в лифте, Кировоградская, 15.",
+            description="Застревание в лифте. Признаки: лифт, застревание. "
+            "Кировоградская улица, д. 15.",
+            chief_reply=d["chiefReply"],
+            sample_report=d["expected"]["sampleReport"],
+            inputs=["Выехали."],
+        ),
+    )
+    assert out["by"] == "template" and out["applied"] == []
+    assert {"title", "description"} <= set(out["rejected"])
+    assert out["scenario"] == d
+
+
+def test_echo_rejection_is_logged_without_user_text(caplog):
+    d = draft("progress")
+    echo = d["incident"]["descriptions"][0]["text"] + " Кировоградская улица, д. 15, подъезд 2."
+    with caplog.at_level("INFO", logger="dds_ai.bridge.compose"):
+        compose_scenario({"scenario": d, "complication": "progress"}, answer(description=echo))
+    log = caplog.text
+    assert "description" in log and "повтор" in log
+    assert "Кировоградская" not in log
+
+
+@pytest.mark.parametrize(
+    ("phrase", "spoils"),
+    [
+        ("но не нашли ключ", False),
+        ("но не нашёл ключ", False),
+        ("но не нашла ключ", False),
+        ("а дом не наш", True),
+        ("это не нашего района", True),
+        ("вызов не нашей зоны", True),
+    ],
+)
+def test_words_like_ne_nashli_are_not_spoilers(phrase, spoils):
+    out = compose_scenario(
+        {"scenario": draft(), "complication": "zone"},
+        answer(
+            description="Женщина застряла в лифте между 7 и 8 этажами. Соседи пытались помочь, "
+            f"{phrase} от машинного отделения."
+        ),
+    )
+    assert ("description" in out["rejected"]) is spoils
+    assert ("description" in out["applied"]) is not spoils
+
+
+def test_short_draft_words_do_not_make_new_words_old():
+    # в черновике есть «в» и «не»: слова на эти буквы — всё равно новые
+    out = compose_scenario(
+        {"scenario": draft("progress"), "complication": "progress"},
+        answer(title="Внутри взрослых нет, вода не выключена"),
+    )
+    assert "title" in out["applied"]
+
+
+def test_spoilers_depend_on_complication():
+    text = "Застряли в лифте. Соседи вызвали аварийную организацию, ждут на площадке."
+    progress = compose_scenario(
+        {"scenario": draft("progress"), "complication": "progress"}, answer(description=text)
+    )
+    zone = compose_scenario({"scenario": draft(), "complication": "zone"}, answer(description=text))
+    none = compose_scenario(
+        {"scenario": draft("none"), "complication": "none"}, answer(description=text)
+    )
+    assert "description" in progress["applied"]
+    assert "description" in zone["rejected"]
+    assert "description" in none["applied"]
+
+
+@pytest.mark.parametrize(
+    ("title", "spoils"),
+    [
+        ("Бригада устранила застревание у Кировоградской", True),
+        ("Лифт застрял, мастер выехал и прибыл на место", True),
+        ("Неисправность устранена, работы завершены", True),
+        ("Мужчина застрял в кабине, просит поскорее устранить", False),
+    ],
+)
+def test_progress_title_must_not_reveal_work_stages(title, spoils):
+    out = compose_scenario(
+        {"scenario": draft("progress"), "complication": "progress"}, answer(title=title)
+    )
+    assert ("title" in out["rejected"]) is spoils
+    assert ("title" in out["applied"]) is not spoils
+
+
+def test_word_forms_of_draft_words_are_not_new():
+    # «лифтах» — «лифте» из черновика в другой форме: нового слова одно («мужчина»), это повтор
+    d = draft("progress")
+    d["title"] = "Застревание в лифте"
+    out = compose_scenario(
+        {"scenario": d, "complication": "progress"}, answer(title="Застревание: мужчина в лифтах")
+    )
+    assert "title" in out["rejected"] and "title" not in out["applied"]
+
+
+def test_prompt_does_not_ask_to_rewrite_template_text():
+    llm = answer()
+    d = draft()
+    d["incident"]["descriptions"][0]["text"] = "Шаблон. Признаки: лифт, застревание."
+    compose_scenario({"scenario": d, "complication": "zone"}, llm)
+    prompt = llm.prompts[0]
+    assert "Признаки: лифт, застревание." not in prompt
+    assert d["title"] not in prompt

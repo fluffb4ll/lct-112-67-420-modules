@@ -155,9 +155,17 @@ export function toBody(sc: Scenario, categoryId: number | null): ScenarioBody {
 export function fromDetails(d: ScenarioDetails): Scenario {
   const ref = (d.referenceCard ?? {}) as { expected?: Scenario['expected']; scenario?: Partial<Scenario> };
   const facts = (d.incidentFacts ?? {}) as { incident?: Scenario['incident'] };
+  const caller = (d.callerProfile ?? {}) as { chiefReply?: unknown };
   const base = (ref.scenario ?? {}) as Partial<Scenario>;
   return {
     ...(base as Scenario),
+    // сценарий, созданный не фронтом (e2e, другие клиенты), может прийти без этих полей
+    station: base.station ?? 'dds',
+    serviceKind: base.serviceKind ?? 'uprava',
+    skills: base.skills ?? [],
+    inputs: base.inputs ?? [],
+    origin: base.origin ?? 'teacher',
+    chiefReply: base.chiefReply ?? (typeof caller.chiefReply === 'string' ? caller.chiefReply : ''),
     id: d.id,
     title: d.title,
     difficulty: DIFFICULTY[d.complexity] ?? 1,
@@ -169,4 +177,25 @@ export function fromDetails(d: ScenarioDetails): Scenario {
     incident: facts.incident ?? (base.incident as Scenario['incident']),
     expected: ref.expected ?? (base.expected as Scenario['expected']),
   };
+}
+
+/**
+ * Сценарий с сервера, на котором можно тренироваться: утверждён и содержит карточку происшествия
+ * и эталон в модели фронта. Иначе — null (эмулятор упадёт на неполной карточке).
+ */
+export function playableFromDetails(d: ScenarioDetails): Scenario | null {
+  if (d.status !== 'APPROVED') return null;
+  const sc = fromDetails(d);
+  const inc = sc.incident as Partial<Scenario['incident']> | undefined;
+  const exp = sc.expected as Partial<Scenario['expected']> | undefined;
+  const ok =
+    !!inc?.address &&
+    !!inc.type &&
+    Array.isArray(inc.descriptions) &&
+    Array.isArray(inc.services) &&
+    Array.isArray(exp?.path) &&
+    exp.path.length > 0 &&
+    Array.isArray(exp.commentMustMention) &&
+    Array.isArray(exp.reportMustMention);
+  return ok ? sc : null;
 }

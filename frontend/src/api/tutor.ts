@@ -50,7 +50,8 @@ export function peerReply(peer: CallPeer, _number: string, transcript: string, s
 
   const low = text.toLowerCase();
   const repeat = said.some((prev) => prev.trim().toLowerCase() === low);
-  const hasAddress = scenario ? matchGroups(text, [scenario.expected.reportMustMention[0] ?? []]).missing.length === 0 : /\d/.test(text);
+  // fuzzy: доклад часто приходит из STT с искажёнными словами (как в ai)
+  const hasAddress = scenario ? matchGroups(text, [scenario.expected.reportMustMention[0] ?? []], { fuzzy: true }).missing.length === 0 : /\d/.test(text);
   const hasVictims = /пострадав|человек|ребён|ребен|застря|зажат|задым/i.test(text);
   const short = text.split(/\s+/).filter(Boolean).length < 4;
 

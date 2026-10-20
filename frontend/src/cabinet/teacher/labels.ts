@@ -13,6 +13,7 @@ export const STATUS_LABELS: Record<ScenarioStatus, string> = {
 export const ORIGIN_LABELS: Record<ScenarioOrigin, string> = {
   dataset: 'Методические материалы',
   generated: 'Текст написала модель ИИ',
-  teacher: 'Текст из заготовки классификатора',
+  template: 'Текст из заготовки классификатора',
+  teacher: 'Создан преподавателем',
   student: 'Карточка обучающегося',
 };

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PageResponse } from '../../api/admin';
 import { mutate } from '../../api/db';
-import { composeFallbackReason, composeScenario } from '../../api/ai';
+import { composeScenario } from '../../api/ai';
 import { describeError } from '../../api/errors';
 import { COMPLICATION_LABELS, generateScenarios, loadClassifier, upravaGroups, type Classifier, type Complication } from '../../api/generator';
 import {
@@ -19,6 +19,7 @@ import type { Scenario } from '../../domain/types';
 import { ddmmyyyy } from '../../domain/format';
 import { useMe } from '../../store/session';
 import { Badge, Button, Checkbox, Empty, Input, Modal, Notice, Panel, Select, Table, Tabs } from '../../ui';
+import { composeAndSave, generateMessage, noticesAfterLoad, type BankNotices } from './composeNote';
 import { STATUS_LABELS } from './labels';
 
 /*
@@ -64,7 +65,7 @@ export function ScenarioBank() {
   const [data, setData] = useState<Loaded<PageResponse<ScenarioRow>>>('loading');
   const [categories, setCategories] = useState<IncidentCategory[] | null>(null);
   const [gen, setGen] = useState(false);
-  const [msg, setMsg] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null);
+  const [notices, setNotices] = useState<BankNotices>({ load: null, generate: null });
   // генерация идёт в фоне: окно закрывается сразу, карточки появляются по мере готовности
   const [working, setWorking] = useState('');
   const stop = useRef(false);
@@ -73,7 +74,7 @@ export function ScenarioBank() {
 
   const apply = useCallback((r: Awaited<ReturnType<typeof load>>) => {
     setData(r.list);
-    setMsg((m) => (r.error ? { tone: 'bad', text: r.error } : m?.tone === 'bad' ? null : m));
+    setNotices((n) => noticesAfterLoad(n, r.error));
   }, []);
 
   const reload = useCallback(() => load(filter, search, page).then(apply), [apply, filter, search, page]);
@@ -110,7 +111,14 @@ export function ScenarioBank() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="primary" disabled={!canEdit} onClick={() => setGen(true)}>
+        <Button
+          variant="primary"
+          disabled={!canEdit}
+          onClick={() => {
+            setNotices((n) => ({ ...n, generate: null }));
+            setGen(true);
+          }}
+        >
           Сгенерировать ИИ
         </Button>
         <Button disabled={!canEdit} onClick={() => navigate('/teacher/bank/new')}>
@@ -127,7 +135,17 @@ export function ScenarioBank() {
         />
       </div>
 
-      {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+      {notices.load && <Notice tone="bad">{notices.load}</Notice>}
+      {notices.generate && (
+        <Notice tone={notices.generate.tone}>
+          <div className="flex items-start gap-2">
+            <span className="flex-1">{notices.generate.text}</span>
+            <button type="button" className="text-arm-muted hover:text-arm-text" aria-label="Закрыть сообщение" onClick={() => setNotices((n) => ({ ...n, generate: null }))}>
+              ×
+            </button>
+          </div>
+        </Notice>
+      )}
       {working && (
         <Notice tone="neutral">
           {working} Можно продолжать работать — карточки появятся в списке сами.
@@ -219,64 +237,40 @@ export function ScenarioBank() {
             setGen(false);
             setFilter('DRAFT');
             setPage(0);
+            setNotices((n) => ({ ...n, generate: null }));
             stop.current = false;
             void (async () => {
-              let saved = 0;
-              let failed = 0;
-              let byTemplate = 0;
-              let why = '';
-              let model = '';
-              for (const [i, { draft, comp }] of items.entries()) {
-                if (stop.current) break;
-                // время ответа — часть объяснения: мгновенный ответ означает, что модель не звали,
-                // а на слабом сервере карточка пишется минутами — показываем счёт секунд
-                const started = performance.now();
-                const tick = () =>
-                  setWorking(
-                    `ИИ пишет карточку ${i + 1} из ${items.length}… ${Math.round((performance.now() - started) / 1000)} с`,
-                  );
-                tick();
-                const ticker = setInterval(tick, 1000);
-                const sc = await composeScenario(draft, comp, difficulty).finally(() => clearInterval(ticker)).then(
-                  (r) => {
-                    if (r.by === 'llm') {
-                      model = model || r.model?.model_name || '';
-                      return { ...r.scenario, origin: 'generated' as const };
-                    }
-                    byTemplate++;
-                    why = why || composeFallbackReason(r, (performance.now() - started) / 1000);
-                    return { ...r.scenario, origin: 'teacher' as const };
+              let ticker: ReturnType<typeof setInterval> | undefined;
+              const outcome = await composeAndSave(
+                items.map((x) => x.draft),
+                {
+                  // текст пишет языковая модель ИИ-контура; контур недоступен — остаётся текст шаблона
+                  compose: (draft, i) => composeScenario(draft, items[i].comp, difficulty),
+                  save: async (sc) => {
+                    const { scenarioId } = await createScenarioOnServer(toBody(sc, categoryId));
+                    // зеркалим в локальные данные: занятия и тренажёр пока работают на них
+                    mutate((d) => d.scenarios.unshift({ ...sc, id: scenarioId }));
+                    void reload();
                   },
-                  (e: unknown) => {
-                    byTemplate++;
-                    why = why || (e instanceof Error ? e.message : 'ИИ-контур недоступен');
-                    return { ...draft, origin: 'teacher' as const };
+                  closed: () => stop.current,
+                  // на слабом сервере карточка пишется минутами — показываем счёт секунд
+                  onProgress: (i) => {
+                    clearInterval(ticker);
+                    const started = performance.now();
+                    const tick = () => setWorking(`ИИ пишет карточку ${i + 1} из ${items.length}… ${Math.round((performance.now() - started) / 1000)} с`);
+                    tick();
+                    ticker = setInterval(tick, 1000);
                   },
-                );
-                if (stop.current) break;
-                try {
-                  setWorking(`сохраняю карточку ${i + 1} из ${items.length}…`);
-                  const { scenarioId } = await createScenarioOnServer(toBody(sc, categoryId));
-                  mutate((d) => d.scenarios.unshift({ ...sc, id: scenarioId }));
-                  saved++;
-                } catch (e) {
-                  failed++;
-                  setMsg({ tone: 'bad', text: describeError(e, 'Не удалось сохранить сценарий') });
-                }
-                void reload();
-              }
+                  onSaving: (i) => {
+                    clearInterval(ticker);
+                    setWorking(`сохраняю карточку ${i + 1} из ${items.length}…`);
+                  },
+                  onSaveError: (e) => setNotices((n) => ({ ...n, generate: { tone: 'bad', text: describeError(e, 'Не удалось сохранить сценарий') } })),
+                },
+              ).finally(() => clearInterval(ticker));
               setWorking('');
-              if (saved) {
-                setMsg({
-                  tone: failed ? 'bad' : 'ok',
-                  text:
-                    `Готово: ${saved} черновик(ов). ` +
-                    (byTemplate
-                      ? `Текст писала не модель, а заготовка (${byTemplate} из ${saved}): ${why}.`
-                      : `Текст написала языковая модель${model ? ` ${model}` : ''}.`) +
-                    (failed ? ` Не удалось сохранить: ${failed}.` : ''),
-                });
-              }
+              if (outcome.saved || outcome.stoppedByLimit) setNotices((n) => ({ ...n, generate: generateMessage(outcome, items.length) }));
+              void reload();
             })();
           }}
         />

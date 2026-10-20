@@ -2,7 +2,7 @@ import type { ComponentType, ReactNode } from 'react';
 import { useNow } from '../app/hooks';
 import { navigate } from '../app/router';
 import { IcHelp, IcRun } from '../arm/icons';
-import { armHeaderDate } from '../domain/format';
+import { armHeaderDate, shortName } from '../domain/format';
 import { useMe, useSession } from '../store/session';
 import { cx } from '../ui/cx';
 
@@ -33,8 +33,7 @@ export function CabinetLayout({ nav, active, children, title, actions }: { nav: 
     navigate('/login');
   };
 
-  const parts = (user?.fullName ?? '').split(' ');
-  const shortName = `${parts[0] ?? ''} ${parts[1]?.[0] ?? ''} ${parts[2]?.[0] ?? ''}`.trim();
+  const userName = shortName(user?.fullName);
 
   return (
     <div className="flex min-h-full flex-col bg-c-bg">
@@ -52,7 +51,7 @@ export function CabinetLayout({ nav, active, children, title, actions }: { nav: 
             <div className="min-w-0">
               <div className="text-[15px] font-bold whitespace-nowrap">{armHeaderDate(now)}</div>
               <div className="mt-1 flex items-center gap-2 text-[12px] text-[#dfe3e6]">
-                <span className="truncate">, {shortName}</span>
+                <span className="truncate">{userName}</span>
                 <IcHelp size={13} />
                 <button onClick={logout} title="Выйти" aria-label="Выйти" className="text-[#dfe3e6] hover:text-white">
                   <IcRun size={14} />

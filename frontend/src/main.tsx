@@ -6,6 +6,9 @@ import '@fontsource/roboto/500.css';
 import '@fontsource/roboto/700.css';
 import './styles/index.css';
 import { App } from './app/App';
+import { installSessionSync } from './store/session';
+
+installSessionSync();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

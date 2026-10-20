@@ -8,6 +8,19 @@ const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', '�
 
 export const armHeaderDate = (d: Date) => `${WEEKDAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 
+/** «Пупкин Василий Тестович» → «Пупкин В Т» (так пользователь подписан в шапке АРМ) */
+export function shortName(fullName: string | null | undefined): string {
+  const [surname = '', ...rest] = (fullName ?? '').trim().split(/\s+/);
+  return [surname, ...rest.map((p) => p[0])].join(' ').trim();
+}
+
+/** Подпись оператора в шапке АРМ: «оп. 227, Пупкин В Т»; без номера — только имя */
+export function operatorLabel(fullName: string | null | undefined, operatorNum?: string | null): string {
+  const name = shortName(fullName);
+  const num = operatorNum?.trim();
+  return [num ? `оп. ${num}` : '', name].filter(Boolean).join(', ');
+}
+
 export const hhmm = (iso: string | Date) => {
   const d = new Date(iso);
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;

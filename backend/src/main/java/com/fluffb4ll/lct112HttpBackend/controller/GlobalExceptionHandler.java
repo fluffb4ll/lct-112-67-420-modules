@@ -18,6 +18,13 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(401).body(response);
     }
 
+    /** Чужой ресурс или нехватка роли — 403: в отличие от 401 фронт не считает сессию истёкшей */
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<ErrorResponseDto> processForbiddenError(ForbiddenException e) {
+        ErrorResponseDto response = new ErrorResponseDto(e.getMessage());
+        return ResponseEntity.status(403).body(response);
+    }
+
     @ExceptionHandler(UserUpdateException.class)
     public ResponseEntity<ErrorResponseDto> processUserCreationError(UserUpdateException e) {
         ErrorResponseDto response = new ErrorResponseDto(e.getMessage());
@@ -46,6 +53,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponseDto> processSessionError(SessionException e) {
         ErrorResponseDto response = new ErrorResponseDto(e.getMessage());
         return ResponseEntity.status(400).body(response);
+    }
+
+    @ExceptionHandler(SessionConflictException.class)
+    public ResponseEntity<ErrorResponseDto> processSessionConflictError(SessionConflictException e) {
+        ErrorResponseDto response = new ErrorResponseDto(e.getMessage());
+        return ResponseEntity.status(409).body(response);
     }
 
     @ExceptionHandler(OperatorCardException.class)
