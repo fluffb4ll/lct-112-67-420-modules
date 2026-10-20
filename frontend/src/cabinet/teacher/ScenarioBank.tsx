@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PageResponse } from '../../api/admin';
 import { mutate } from '../../api/db';
-import { composeScenario } from '../../api/ai';
+import { composeFallbackReason, composeScenario } from '../../api/ai';
 import { describeError } from '../../api/errors';
 import { COMPLICATION_LABELS, generateScenarios, loadClassifier, upravaGroups, type Classifier, type Complication } from '../../api/generator';
 import {
@@ -29,6 +29,18 @@ import { STATUS_LABELS } from './labels';
  */
 
 type Filter = BackendStatus | 'all';
+
+/*
+ * Группы Единого классификатора происшествий укрупнены иначе, чем справочник категорий на
+ * сервере. Сопоставляем по смыслу; если совпадения нет, преподаватель выбирает категорию сам.
+ */
+const KIND_BY_GROUP: [RegExp, string][] = [
+  [/лифт|мусоропровод|подъезд|кровл|фасад|дом|жил|отоплен|вод|канализ|электр|освещен/i, 'коммунальн|жкх|авари'],
+  [/пожар|гор|задымлен|возгоран/i, 'пожар'],
+  [/газ/i, 'газ'],
+  [/дтп|транспорт|дорог/i, 'дорож|транспорт|дтп'],
+  [/труп|смерт|погиб/i, 'труп|смерт'],
+];
 
 const DIFFICULTY: Record<string, number> = { LOW: 1, MEDIUM: 2, HARD: 3 };
 const FRONT_STATUS = { DRAFT: 'draft', APPROVED: 'approved', ARCHIVED: 'archived' } as const;
@@ -212,17 +224,24 @@ export function ScenarioBank() {
               let saved = 0;
               let failed = 0;
               let byTemplate = 0;
+              let why = '';
+              let model = '';
               for (const [i, { draft, comp }] of items.entries()) {
                 if (stop.current) break;
                 setWorking(`ИИ пишет карточку ${i + 1} из ${items.length}…`);
                 const sc = await composeScenario(draft, comp, difficulty).then(
                   (r) => {
-                    if (r.by === 'llm') return { ...r.scenario, origin: 'generated' as const };
+                    if (r.by === 'llm') {
+                      model = model || r.model?.model_name || '';
+                      return { ...r.scenario, origin: 'generated' as const };
+                    }
                     byTemplate++;
+                    why = why || composeFallbackReason(r);
                     return { ...r.scenario, origin: 'teacher' as const };
                   },
-                  () => {
+                  (e: unknown) => {
                     byTemplate++;
+                    why = why || (e instanceof Error ? e.message : 'ИИ-контур недоступен');
                     return { ...draft, origin: 'teacher' as const };
                   },
                 );
@@ -243,9 +262,11 @@ export function ScenarioBank() {
                 setMsg({
                   tone: failed ? 'bad' : 'ok',
                   text:
-                    `Готово: ${saved} черновик(ов)` +
-                    (byTemplate ? `, из них ${byTemplate} с текстом заготовки — модель не успела` : ' — текст написала модель') +
-                    (failed ? `. Не удалось сохранить: ${failed}.` : '.'),
+                    `Готово: ${saved} черновик(ов). ` +
+                    (byTemplate
+                      ? `Текст писала не модель, а заготовка (${byTemplate} из ${saved}): ${why}.`
+                      : `Текст написала языковая модель${model ? ` ${model}` : ''}.`) +
+                    (failed ? ` Не удалось сохранить: ${failed}.` : ''),
                 });
               }
             })();
@@ -292,13 +313,18 @@ function GenerateModal({
   const groups = c ? upravaGroups(c) : [];
   // пока преподаватель не выбрал категорию — подбираем по группе классификатора («ЛИФТ» → «Лифт»),
   // и только если совпадения нет, берём первую из справочника
-  const suggested = (() => {
-    if (!categories?.length) return '' as const;
+  const match = (() => {
+    if (!categories?.length) return null;
     const g = group.toLowerCase();
-    const hit = categories.find((x) => g.includes(x.name.toLowerCase()) || x.name.toLowerCase().includes(g.split(/[ ,(-]/)[0]));
-    return (hit ?? categories[0]).id;
+    const word = g.split(/[ ,(-]/)[0];
+    const direct = categories.find((x) => g.includes(x.name.toLowerCase()) || x.name.toLowerCase().includes(word));
+    if (direct) return direct;
+    // по смыслу: группы классификатора ложатся на укрупнённые категории справочника
+    const kind = KIND_BY_GROUP.find(([re]) => re.test(g))?.[1];
+    return kind ? (categories.find((x) => new RegExp(kind, 'i').test(x.name)) ?? null) : null;
   })();
-  const chosen = categoryId === '' ? suggested : categoryId;
+  const chosen = categoryId === '' ? (match?.id ?? categories?.[0]?.id ?? '') : categoryId;
+  const guessed = categoryId === '' && !match && !!categories?.length;
 
   const run = () => {
     if (!c || chosen === '') return;
@@ -340,6 +366,7 @@ function GenerateModal({
             </option>
           ))}
         </Select>
+        {guessed && <Notice tone="warn">Для группы «{group}» подходящей категории в справочнике нет — выберите вручную или заведите её в разделе администратора «справочник».</Notice>}
         {categories === null ? (
           <Notice tone="warn">
             Сервер не отдаёт справочник категорий происшествий (<code>GET /api/scenarios/categories</code>) — без него сценарий не сохранить: категория обязательна.

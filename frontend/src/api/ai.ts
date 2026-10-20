@@ -56,9 +56,40 @@ const postJson = (path: string, body: unknown, timeoutMs?: number) =>
 /** Сколько ждём языковую модель на один сценарий (на слабом сервере она пишет долго) */
 export const COMPOSE_TIMEOUT_MS = 120_000;
 
+/** Модель, которой отвечал контур; null — на сервере модель не подключена */
+export interface AiModelRef {
+  component: string;
+  model_name: string;
+  model_version: string;
+}
+
 export interface ComposeResult {
   scenario: Scenario;
   by: 'llm' | 'template';
+  /** поля, текст которых написала модель */
+  applied?: string[];
+  /** поля, которые модель написала, но контур их не пропустил */
+  rejected?: string[];
+  model?: AiModelRef | null;
+}
+
+const COMPOSE_FIELDS: Record<string, string> = {
+  title: 'название',
+  description: 'описание',
+  chiefReply: 'ответ руководителя',
+  sampleReport: 'эталонный доклад',
+  inputs: 'реплики исполнителя',
+};
+
+/**
+ * Почему текст остался от заготовки. Берётся из ответа контура, а не из догадок: model: null —
+ * модели на сервере нет вовсе; непустой rejected — модель написала, но проверка не пропустила.
+ */
+export function composeFallbackReason(r: ComposeResult): string {
+  if (r.model === null) return 'на сервере не подключена языковая модель — контур работает по правилам';
+  const bad = (r.rejected ?? []).map((f) => COMPOSE_FIELDS[f] ?? f);
+  if (bad.length) return `модель написала текст, но проверка контура его отклонила: ${bad.join(', ')}`;
+  return 'модель не ответила за отведённое время или вернула ответ, который не разобрать';
 }
 
 /** Языковая модель переписывает текст заготовки; эталон и проверки остаются от правил */

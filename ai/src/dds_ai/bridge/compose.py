@@ -31,6 +31,15 @@ COMPOSE_SCHEMA = {
 }
 
 COMPOSE_TIMEOUT_S = 50.0
+MAX_COMPOSE_TOKENS = 700
+# небольшая модель с первого раза часто промахивается мимо требований и тогда в сценарии
+# остаётся текст заготовки; одна повторная попытка укладывается в срок nginx (120 с)
+ATTEMPTS = 2
+RETRY_TIMEOUT_S = 35.0
+RETRY_HINT = (
+    "\nПредыдущий ответ не подошёл: он не выполнил требования выше. "
+    "Напиши заново, короче и строго по требованиям. Ответь только JSON."
+)
 
 COMPLICATION_HINTS = {
     "zone": "дом обслуживает другая организация — служба ДДС реагировать не должна",
@@ -113,6 +122,10 @@ def _prompt(scenario: dict[str, Any], complication: str, difficulty: int) -> str
         "улицу и номер дома, суть происшествия и принятые меры;",
         f"inputs — ровно {len(inputs)} реплик исполнителя в том же порядке и с тем же смыслом "
         "(пустой список, если черновик пуст).",
+        # служебные слова задания модель охотно повторяет в названии и описании, а проверка
+        # такой текст отклоняет и оставляет шаблон — просим не брать их сразу
+        "В title и description не пиши служебные слова задания: ДДС, реагирование, организация, "
+        "дубль, зарегистрирована, отказ, чужой. Пиши только о самом происшествии.",
         "Пиши по-русски. Ответь только JSON.",
     ]
     return "\n".join(lines)
@@ -147,6 +160,58 @@ def _check_shape(draft: dict[str, Any]) -> None:
         raise ValueError("scenario.inputs must be a list")
 
 
+def _apply(
+    out: dict[str, Any], scenario: dict[str, Any], exp: dict[str, Any], complication: str
+) -> tuple[list[str], list[str]]:
+    """Переносит текст модели в сценарий поле за полем: (что приняли, что отклонили)."""
+    applied: list[str] = []
+    rejected: list[str] = []
+
+    title = _text(out.get("title"), 8, 120)
+    if title is not None and not _spoils(title):
+        scenario["title"] = title
+        applied.append("title")
+    elif out.get("title"):
+        rejected.append("title")
+    desc = _text(out.get("description"), 30, 700)
+    if desc is not None and not _spoils(desc):
+        scenario["incident"]["descriptions"][0]["text"] = desc
+        applied.append("description")
+    elif out.get("description"):
+        rejected.append("description")
+
+    # ответ руководителя должен сохранить организацию, куда передаётся информация
+    chief = _text(out.get("chief_reply"), 10, 400)
+    org = (
+        (exp.get("commentMustMention") or [[]])[0]
+        if complication in {"zone", "refusal"}
+        else []
+    )
+    if chief and (not org or not match_groups(chief, [org])[1]):
+        scenario["chiefReply"] = chief
+        applied.append("chiefReply")
+    elif out.get("chief_reply"):
+        rejected.append("chiefReply")
+
+    # эталонный доклад должен проходить ту же проверку, что и доклад обучающегося
+    report = _text(out.get("sample_report"), 15, 400)
+    if report and not match_groups(report, exp.get("reportMustMention") or [])[1]:
+        exp["sampleReport"] = report
+        applied.append("sampleReport")
+    elif out.get("sample_report"):
+        rejected.append("sampleReport")
+
+    inputs = scenario.get("inputs") or []
+    texts = [_text(t, 3, 300) for t in out.get("inputs") or []]
+    if inputs and len(texts) == len(inputs) and all(texts):
+        for item, text in zip(inputs, texts, strict=True):
+            item["text"] = text
+        applied.append("inputs")
+    elif out.get("inputs"):
+        rejected.append("inputs")
+    return applied, rejected
+
+
 def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str, Any]:
     draft = body.get("scenario")
     if not isinstance(draft, dict):
@@ -159,56 +224,27 @@ def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str,
         scenario["expected"] = {}
     exp = scenario["expected"]
 
-    out = ask_json(
-        llm,
-        _prompt(draft, complication, difficulty),
-        schema=COMPOSE_SCHEMA,
-        max_tokens=700,
-        timeout_s=COMPOSE_TIMEOUT_S,
-    )
+    prompt = _prompt(draft, complication, difficulty)
     applied: list[str] = []
     rejected: list[str] = []
-    if out is not None:
-        title = _text(out.get("title"), 8, 120)
-        if title is not None and not _spoils(title):
-            scenario["title"] = title
-            applied.append("title")
-        elif out.get("title"):
-            rejected.append("title")
-        desc = _text(out.get("description"), 30, 700)
-        if desc is not None and not _spoils(desc):
-            scenario["incident"]["descriptions"][0]["text"] = desc
-            applied.append("description")
-        elif out.get("description"):
-            rejected.append("description")
-
-        # ответ руководителя должен сохранить организацию, куда передаётся информация
-        chief = _text(out.get("chief_reply"), 10, 400)
-        org = (
-            (exp.get("commentMustMention") or [[]])[0]
-            if complication in {"zone", "refusal"}
-            else []
+    # пока модель не дала ни одного годного поля, пробуем ещё раз: иначе в сценарии
+    # останется текст заготовки, ради которого генерацию никто не запускает
+    for attempt in range(ATTEMPTS if llm is not None else 1):
+        out = ask_json(
+            llm,
+            prompt if attempt == 0 else prompt + RETRY_HINT,
+            schema=COMPOSE_SCHEMA,
+            max_tokens=MAX_COMPOSE_TOKENS,
+            timeout_s=COMPOSE_TIMEOUT_S if attempt == 0 else RETRY_TIMEOUT_S,
         )
-        if chief and (not org or not match_groups(chief, [org])[1]):
-            scenario["chiefReply"] = chief
-            applied.append("chiefReply")
-        elif out.get("chief_reply"):
-            rejected.append("chiefReply")
-
-        # эталонный доклад должен проходить ту же проверку, что и доклад обучающегося
-        report = _text(out.get("sample_report"), 15, 400)
-        if report and not match_groups(report, exp.get("reportMustMention") or [])[1]:
-            exp["sampleReport"] = report
-            applied.append("sampleReport")
-        elif out.get("sample_report"):
-            rejected.append("sampleReport")
-
-        inputs = scenario.get("inputs") or []
-        texts = [_text(t, 3, 300) for t in out.get("inputs") or []]
-        if inputs and len(texts) == len(inputs) and all(texts):
-            for item, text in zip(inputs, texts, strict=True):
-                item["text"] = text
-            applied.append("inputs")
+        if out is None:
+            continue
+        got, bad = _apply(out, scenario, exp, complication)
+        applied = list(dict.fromkeys(applied + got))
+        rejected = list(dict.fromkeys(rejected + bad))
+        # ради названия и описания генерацию и запускают — остальные поля ждать не стоит
+        if "title" in applied or "description" in applied:
+            break
 
     if applied:
         note = (
