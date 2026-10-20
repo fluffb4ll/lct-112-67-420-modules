@@ -83,13 +83,18 @@ const COMPOSE_FIELDS: Record<string, string> = {
 
 /**
  * Почему текст остался от заготовки. Берётся из ответа контура, а не из догадок: model: null —
- * модели на сервере нет вовсе; непустой rejected — модель написала, но проверка не пропустила.
+ * модели на сервере нет вовсе; непустой rejected — модель написала, но проверка не пропустила;
+ * поля model нет совсем — на сервере сборка контура, которая его ещё не отдаёт. Время ответа
+ * различает оставшиеся случаи: доли секунды — контур даже не звал модель, десятки секунд — звал.
  */
-export function composeFallbackReason(r: ComposeResult): string {
-  if (r.model === null) return 'на сервере не подключена языковая модель — контур работает по правилам';
+export function composeFallbackReason(r: ComposeResult, seconds?: number): string {
+  const took = seconds === undefined ? '' : ` (ответ пришёл за ${seconds < 10 ? seconds.toFixed(1) : seconds.toFixed(0)} с)`;
+  if (r.model === null) return `на сервере не подключена языковая модель — контур работает по правилам${took}`;
+  if (r.model === undefined)
+    return `на сервере сборка ИИ-контура без полей model и rejected — причину он не сообщает${took}`;
   const bad = (r.rejected ?? []).map((f) => COMPOSE_FIELDS[f] ?? f);
-  if (bad.length) return `модель написала текст, но проверка контура его отклонила: ${bad.join(', ')}`;
-  return 'модель не ответила за отведённое время или вернула ответ, который не разобрать';
+  if (bad.length) return `модель ${r.model.model_name} написала текст, но проверка контура его отклонила: ${bad.join(', ')}`;
+  return `модель ${r.model.model_name} не ответила за отведённое время или вернула ответ, который не разобрать${took}`;
 }
 
 /** Языковая модель переписывает текст заготовки; эталон и проверки остаются от правил */

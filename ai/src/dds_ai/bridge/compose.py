@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import re
+import time
 from typing import Any
 
 from ..ports import LLMProvider
@@ -30,12 +31,20 @@ COMPOSE_SCHEMA = {
     "additionalProperties": False,
 }
 
-COMPOSE_TIMEOUT_S = 50.0
-MAX_COMPOSE_TOKENS = 700
-# небольшая модель с первого раза часто промахивается мимо требований и тогда в сценарии
-# остаётся текст заготовки; одна повторная попытка укладывается в срок nginx (120 с)
+# Срок генерации и длина ответа. Адаптер llama.cpp по тайм-ауту выбрасывает всё, что успел
+# написать, поэтому не успеть — то же самое, что не ответить: в сценарии останется заготовка.
+# На процессоре слабого сервера 1,5-миллиардная модель выдаёт порядка десяти токенов в секунду,
+# а на пять полей хватает примерно трёхсот — отсюда и срок, и потолок длины.
+COMPOSE_TIMEOUT_S = 70.0
+MAX_COMPOSE_TOKENS = 420
+# Небольшая модель с первого раза часто промахивается мимо требований. Вторая попытка короче
+# и по сроку, и по длине ответа — помогает и когда написано негодное, и когда не успела.
 ATTEMPTS = 2
-RETRY_TIMEOUT_S = 35.0
+RETRY_TIMEOUT_S = 30.0
+RETRY_TOKENS = 300
+# Общий срок на обе попытки: дольше ждёт уже не фронт, а nginx (120 с), и ответ пропадёт зря
+BUDGET_S = 100.0
+MIN_SLICE_S = 20.0
 RETRY_HINT = (
     "\nПредыдущий ответ не подошёл: он не выполнил требования выше. "
     "Напиши заново, короче и строго по требованиям. Ответь только JSON."
@@ -229,13 +238,17 @@ def compose_scenario(body: dict[str, Any], llm: LLMProvider | None) -> dict[str,
     rejected: list[str] = []
     # пока модель не дала ни одного годного поля, пробуем ещё раз: иначе в сценарии
     # останется текст заготовки, ради которого генерацию никто не запускает
+    started = time.monotonic()
     for attempt in range(ATTEMPTS if llm is not None else 1):
+        left = BUDGET_S - (time.monotonic() - started)
+        if attempt and left < MIN_SLICE_S:
+            break
         out = ask_json(
             llm,
             prompt if attempt == 0 else prompt + RETRY_HINT,
             schema=COMPOSE_SCHEMA,
-            max_tokens=MAX_COMPOSE_TOKENS,
-            timeout_s=COMPOSE_TIMEOUT_S if attempt == 0 else RETRY_TIMEOUT_S,
+            max_tokens=MAX_COMPOSE_TOKENS if attempt == 0 else RETRY_TOKENS,
+            timeout_s=min(COMPOSE_TIMEOUT_S if attempt == 0 else RETRY_TIMEOUT_S, left),
         )
         if out is None:
             continue

@@ -229,6 +229,8 @@ export function ScenarioBank() {
               for (const [i, { draft, comp }] of items.entries()) {
                 if (stop.current) break;
                 setWorking(`ИИ пишет карточку ${i + 1} из ${items.length}…`);
+                // время ответа — часть объяснения: мгновенный ответ означает, что модель не звали
+                const started = performance.now();
                 const sc = await composeScenario(draft, comp, difficulty).then(
                   (r) => {
                     if (r.by === 'llm') {
@@ -236,7 +238,7 @@ export function ScenarioBank() {
                       return { ...r.scenario, origin: 'generated' as const };
                     }
                     byTemplate++;
-                    why = why || composeFallbackReason(r);
+                    why = why || composeFallbackReason(r, (performance.now() - started) / 1000);
                     return { ...r.scenario, origin: 'teacher' as const };
                   },
                   (e: unknown) => {
