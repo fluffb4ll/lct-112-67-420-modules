@@ -102,12 +102,15 @@ export function evaluateDds(
     const total = exp.commentMustMention.length;
     const points = total === 0 ? max : Math.round((hit / total) * max);
     const skill: Skill = scenario.skills.includes('refusal_comment') ? 'refusal_comment' : scenario.skills.includes('work_progress') ? 'work_progress' : 'profile';
+    // в группе перечислены равноправные варианты, достаточно любого — показываем все:
+    // «36814851…» в одиночку читается как непонятные цифры, а не как номер карточки
+    const need = (g: string[]) => (g.length === 1 ? `«${g[0]}»` : `одного из: ${g.map((s) => `«${s}»`).join(', ')}`);
     const detail =
       total === 0
         ? 'Особых требований к тексту нет'
         : missing.length === 0
           ? 'Все ключевые сведения указаны'
-          : `Не указано: ${missing.map((g) => `«${g[0]}…»`).join(', ')}. Эталон: «${Object.values(exp.sample)[0] ?? ''}»`;
+          : `В комментарии не хватает ${missing.map(need).join('; ')}. Эталон: «${Object.values(exp.sample)[0] ?? ''}»`;
     checks.push({ id: 'comment_content', title: 'Полнота комментария', ok: points === max, points, max, detail, ref: 'Памятка, стр. 26, 30', skill });
   }
 
