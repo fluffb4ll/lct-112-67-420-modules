@@ -1,4 +1,4 @@
-import { COMMENT_REQUIRED, PRIMARY, TERMINAL } from './statusMachine';
+import { COMMENT_REQUIRED, PRIMARY } from './statusMachine';
 import { SKILL_ADVICE, SKILL_LABELS } from './skills';
 import { cpm, literacyIssues, matchGroups } from './text';
 import type { Evaluation, EvaluationCheck, ResponseStatus, Scenario, Skill, TrainingEvent } from './types';
@@ -140,9 +140,9 @@ export function evaluateDds(
   {
     const max = 15;
     const common = lcs(path, exp.path);
-    // карточку нельзя закрыть без завершающего статуса, поэтому он не считается лишним,
-    // даже если короткий эталон до него не доходит
-    const extra = path.filter((s) => !exp.path.includes(s) && !TERMINAL.includes(s));
+    // как в ai (rules.py): лишний — любой статус вне эталона, итоговый тоже; карточку закрывает
+    // кнопка «завершить карточку», а не статус
+    const extra = path.filter((s) => !exp.path.includes(s));
     // пустой эталон давал NaN во всём балле; в ai за пустой эталон — полный балл
     let points = exp.path.length ? pyRound((common / exp.path.length) * max) : max;
     if (extra.length) points = Math.max(0, points - 5);
