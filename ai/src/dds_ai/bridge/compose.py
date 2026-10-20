@@ -188,6 +188,10 @@ def _spoils(text: str) -> bool:
     return any(_letters(s) in low for s in SPOILERS)
 
 
+def _digits(text: str) -> set[str]:
+    return set(re.findall(r"\d+", text))
+
+
 def _check_shape(draft: dict[str, Any]) -> None:
     inc = draft.get("incident")
     if not isinstance(inc, dict):
@@ -222,14 +226,17 @@ def _apply(
     elif out.get("description"):
         rejected.append("description")
 
-    # ответ руководителя должен сохранить организацию, куда передаётся информация
+    # Ответ руководителя должен сохранить организацию, куда передаётся информация, и её номер:
+    # по этому номеру обучающийся звонит, выдуманный уведёт его в никуда. Поэтому цифры в
+    # ответе модели разрешены только те, что уже есть в черновике и в адресе.
     chief = _text(out.get("chief_reply"), 10, 400)
     org = (
         (exp.get("commentMustMention") or [[]])[0]
         if complication in {"zone", "refusal"}
         else []
     )
-    if chief and (not org or not match_groups(chief, [org])[1]):
+    known = _digits(f"{scenario.get('chiefReply', '')} {_address(scenario)}")
+    if chief and (not org or not match_groups(chief, [org])[1]) and not _digits(chief) - known:
         scenario["chiefReply"] = chief
         applied.append("chiefReply")
     elif out.get("chief_reply"):

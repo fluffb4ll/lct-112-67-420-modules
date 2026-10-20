@@ -31,6 +31,24 @@ import {
  * снизу — панель «Службы» с историей статусов и формой проставления статуса своей службы.
  */
 
+/*
+ * Подсказка по назначению элемента карточки (пункт 7 рекомендаций заказчика). Всплывает
+ * по наведению и ничего не занимает в потоке: интерфейс обучаемого менять нельзя (пункт 6),
+ * поэтому элемент остаётся прежним, а подсказка лежит поверх.
+ */
+function Tip({ text, below }: { text: string; below?: boolean }) {
+  return (
+    <span
+      className={cx(
+        'pointer-events-none absolute left-1/2 z-50 hidden w-max max-w-[260px] -translate-x-1/2 whitespace-normal rounded bg-[#2b3136] px-2 py-1 text-left text-[11px] leading-snug font-normal text-white shadow-lg group-hover:block',
+        below ? 'top-full mt-1' : 'bottom-full mb-1',
+      )}
+    >
+      {text}
+    </span>
+  );
+}
+
 export interface StatusSubmit {
   status: ResponseStatus;
   orderNo: string;
@@ -106,17 +124,25 @@ export function IncidentCard({
                 <span>Заблокированные: {incident.flags.blocked ? 'да' : 'нет'}</span>
               </Block>
               <Block className="flex h-[42px] items-center gap-2">
-                <span className={cx('flex h-7 items-center gap-1 border px-2 text-[12px] font-bold', incident.flags.chs ? 'border-arm-orange bg-arm-orange text-white' : 'border-arm-line')}>
+                <span
+                  className={cx('group relative flex h-7 items-center gap-1 border px-2 text-[12px] font-bold', incident.flags.chs ? 'border-arm-orange bg-arm-orange text-white' : 'border-arm-line')}
+                >
                   ЧС <IcBolt size={14} />
+                  <Tip text="Признак чрезвычайной ситуации. Ставит оператор 112; для ДДС это знак, что происшествие идёт по особому порядку." />
                 </span>
-                <span className={cx('flex h-7 items-center gap-1 border px-2 text-[12px] font-bold', incident.flags.chp ? 'border-arm-orange bg-arm-orange text-white' : 'border-arm-line')}>
+                <span
+                  className={cx('group relative flex h-7 items-center gap-1 border px-2 text-[12px] font-bold', incident.flags.chp ? 'border-arm-orange bg-arm-orange text-white' : 'border-arm-line')}
+                >
                   ЧП <IcWarn size={14} />
+                  <Tip text="Признак происшествия особой важности. Его тоже ставит оператор 112." />
                 </span>
-                <span className="ml-1 flex h-7 w-7 items-center justify-center rounded-full border border-arm-line text-arm-muted" title="Редактирование доступно специалисту 112">
+                <span className="group relative ml-1 flex h-7 w-7 items-center justify-center rounded-full border border-arm-line text-arm-muted">
                   <IcPencil size={14} />
+                  <Tip text="Правка карточки. Доступна оператору 112: ДДС получает карточку только на чтение." />
                 </span>
-                <span className="ml-3 text-arm-muted">
+                <span className="group relative ml-3 text-arm-muted">
                   <IcPrint size={18} />
+                  <Tip text="Печать карточки." />
                 </span>
               </Block>
             </div>
@@ -175,7 +201,12 @@ function TopBar({ incident, phoneLabel, inCall, incomingFrom, onPhone }: { incid
         </div>
         <div className="flex items-end justify-between gap-2">
           <span className="truncate text-[20px] leading-7 text-[#3e4449]">{value || <span className="text-[#9aa1a6]">&nbsp;</span>}</span>
-          {aonBtn && <span className="mb-1 border border-arm-line bg-white px-1.5 text-[10px] text-arm-muted">АОН</span>}
+          {aonBtn && (
+            <span className="group relative mb-1 border border-arm-line bg-white px-1.5 text-[10px] text-arm-muted">
+              АОН
+              <Tip text="Подставить сюда номер, определившийся при вызове." below />
+            </span>
+          )}
         </div>
       </div>
     </>
@@ -198,8 +229,14 @@ function TopBar({ incident, phoneLabel, inCall, incomingFrom, onPhone }: { incid
         <span className="flex flex-1 flex-col justify-center gap-1.5">
           <span className={cx('text-[13px]', incomingFrom && 'font-bold text-[#1f6b3a]')}>{incomingFrom ? `Входящий: ${incomingFrom}` : phoneLabel}</span>
           <span className="flex gap-2">
-            <span className="bg-[#c4c8cb] px-3 py-0.5 text-[10px] text-[#6d7378]">записи звонков</span>
-            <span className="border border-[#9aa1a6] bg-white px-3 py-0.5 text-[10px]">список SMS</span>
+            <span className="group relative bg-[#c4c8cb] px-3 py-0.5 text-[10px] text-[#6d7378]">
+              записи звонков
+              <Tip text="Аудиозаписи разговоров по этой карточке. В учебном контуре пусто." below />
+            </span>
+            <span className="group relative border border-[#9aa1a6] bg-white px-3 py-0.5 text-[10px]">
+              список SMS
+              <Tip text="Сообщения, отправленные по карточке заявителю и службам." below />
+            </span>
           </span>
         </span>
       </button>
@@ -223,8 +260,14 @@ function TopBar({ incident, phoneLabel, inCall, incomingFrom, onPhone }: { incid
         </span>
       </div>
       <div className="ml-2 flex w-[96px] shrink-0 flex-col gap-1.5">
-        <span className="flex h-[30px] items-center justify-center bg-arm-blue text-[11px] text-white">просмотр</span>
-        <span className="flex h-[30px] items-center justify-center bg-arm-dark text-[11px] text-white">дополнение</span>
+        <span className="group relative flex h-[30px] items-center justify-center bg-arm-blue text-[11px] text-white">
+          просмотр
+          <Tip text="Режим карточки: ДДС видит её только для чтения." below />
+        </span>
+        <span className="group relative flex h-[30px] items-center justify-center bg-arm-dark text-[11px] text-white">
+          дополнение
+          <Tip text="Добавить сведения по своей службе. Сам текст происшествия правит оператор 112." below />
+        </span>
       </div>
     </div>
   );
@@ -263,8 +306,13 @@ function ServicesBar({
     const isOwn = s.serviceId === ownId;
     return (
       <div key={s.serviceId} className={cx('relative flex h-[64px] w-[108px] shrink-0 flex-col items-center border-r border-[#5d6a73] pt-0.5 text-white', historyOf === s.serviceId && 'bg-[#5d6a73]')}>
-        <button onClick={() => setHistoryOf(historyOf === s.serviceId ? null : s.serviceId)} aria-label={`История статусов: ${s.name}`} className="text-[#d9dfe3] hover:text-white">
+        <button
+          onClick={() => setHistoryOf(historyOf === s.serviceId ? null : s.serviceId)}
+          aria-label={`История статусов: ${s.name}`}
+          className="group relative text-[#d9dfe3] hover:text-white"
+        >
           {historyOf === s.serviceId ? <IcChevronDown size={14} /> : <IcChevronUp size={14} />}
+          <Tip text={`История статусов службы «${s.name}»: что и когда она проставила.`} />
         </button>
         {isOwn && !ownClosed && (
           <button
@@ -274,9 +322,10 @@ function ServicesBar({
               onOpenForm();
             }}
             aria-label="Проставить статус"
-            className="absolute top-1 right-1.5 text-white hover:text-arm-orange"
+            className="group absolute top-1 right-1.5 text-white hover:text-arm-orange"
           >
             <IcPencil size={13} />
+            <Tip text="Проставить статус своей службы: приём карточки, ход реагирования, завершение работ." />
           </button>
         )}
         <span className={cx('max-w-full truncate px-1 text-[13px] font-bold', s.main && 'underline underline-offset-2')}>

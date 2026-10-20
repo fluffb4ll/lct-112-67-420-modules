@@ -108,6 +108,16 @@ def test_spoiler_with_punctuation_is_caught():
     assert "description" in out["rejected"]
 
 
+def test_chief_reply_with_an_invented_number_is_rejected():
+    """По номеру из ответа руководителя обучающийся звонит — выдуманный уведёт его в никуда."""
+    out = compose_scenario(
+        {"scenario": draft(), "complication": "zone"},
+        answer(chief_reply="Дом УК «Домовой», не наш. Звоните им на 2299, передайте. Конец связи."),
+    )
+    assert "chiefReply" in out["rejected"]
+    assert out["scenario"]["chiefReply"] == draft()["chiefReply"]
+
+
 def test_text_is_asked_apart_from_the_service_fields():
     """Два запроса: сначала название и описание, потом служебные тексты — так короче ответ."""
     llm = answer()
