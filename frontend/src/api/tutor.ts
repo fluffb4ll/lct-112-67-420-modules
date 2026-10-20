@@ -1,7 +1,7 @@
 import { DIRECTORY } from '../data/services';
 import { COMMENT_REQUIRED } from '../domain/statusMachine';
 import { literacyIssues, matchGroups } from '../domain/text';
-import type { ResponseStatus, Scenario, SoftphoneContact, TrainingEvent, TrainingMode } from '../domain/types';
+import type { ResponseStatus, Scenario, ScenarioPhone, SoftphoneContact, TrainingEvent, TrainingMode } from '../domain/types';
 
 /*
  * Мок ИИ-модуля. На сервере эти ответы формирует локальная LLM (руководитель смены, подсказки,
@@ -17,7 +17,18 @@ export interface CallPeer {
   contactId: string;
 }
 
-export function resolvePeer(number: string, contacts: SoftphoneContact[]): CallPeer | null {
+export function resolvePeer(number: string, contacts: SoftphoneContact[], phones: ScenarioPhone[] = []): CallPeer | null {
+  // номера, которые завёл преподаватель, старше штатных: он мог задать и своё приветствие
+  const own = phones.find((p) => p.number === number);
+  if (own) {
+    return {
+      title: own.title,
+      voice: own.voice,
+      isChief: !!own.isChief,
+      contactId: `sc:${own.number}`,
+      greeting: own.reply?.trim() || `${own.title}, слушаю.`,
+    };
+  }
   const c = contacts.find((x) => x.number === number);
   if (c) {
     const surname = c.name.split(' ')[0];

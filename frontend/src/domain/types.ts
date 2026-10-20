@@ -256,6 +256,14 @@ export interface Scenario {
   approvedAt?: string;
   /** Норматив на отработку карточки, секунд (задаёт преподаватель) */
   timeLimitSec?: number;
+  /**
+   * Телефонный справочник занятия: кому обучающийся может позвонить с учебного телефона.
+   * Список задаёт преподаватель — до десяти номеров на одну ДДС. Пусто — в справочнике
+   * номера самой службы. Номер заявителя добавляется флагом `withApplicant`.
+   */
+  phonebook?: ScenarioPhone[];
+  /** Показывать в справочнике номер заявителя из карточки (АОН) */
+  withApplicant?: boolean;
   /** Шаблон карточки. id/время/служба обучающегося подставляются при выдаче */
   incident: Omit<Incident, 'id' | 'createdAt'>;
   expected: ScenarioExpected;
@@ -288,6 +296,17 @@ export interface DdsService {
   district?: string;
   /** Быстрый набор софтфона: кому докладывает диспетчер */
   contacts: SoftphoneContact[];
+}
+
+/** Строка телефонного справочника, которую завёл преподаватель (пункт 8 рекомендаций) */
+export interface ScenarioPhone {
+  title: string;
+  number: string;
+  voice: 'male' | 'female';
+  /** Чем ответит абонент, если это не руководитель и не исполнитель */
+  reply?: string;
+  /** Руководитель смены: ему докладывают, его ответ разбирается в оценке */
+  isChief?: boolean;
 }
 
 export interface SoftphoneContact {

@@ -132,7 +132,9 @@ export function generateScenarios(c: Classifier, p: GenerateParams): Scenario[] 
         callRequired: true,
         sampleReport: `Докладываю: ${houseLabel} — ${t.t.toLowerCase()}. Уточняю, обслуживаем ли дом.`,
       };
-      chiefReply = `${houseLabel} — дом УК «Домовой», не наш. Передайте в их диспетчерскую и отработайте карточку с комментарием. Конец связи.`;
+      // номер диспетчерской называем вслух: без него передавать информацию некуда,
+      // а эталон требует указать в комментарии, что она передана
+      chiefReply = `${houseLabel} — дом УК «Домовой», не наш. Позвоните в их диспетчерскую, номер 2255, передайте информацию и отработайте карточку с комментарием. Конец связи.`;
     } else if (comp === 'duplicate') {
       skills.splice(0, 1, 'duplicate', 'refusal_comment');
       journalContext = [

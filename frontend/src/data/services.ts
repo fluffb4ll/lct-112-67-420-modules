@@ -1,4 +1,4 @@
-import type { DdsService, SoftphoneContact } from '../domain/types';
+import type { DdsService, Scenario, SoftphoneContact } from '../domain/types';
 
 /*
  * Службы, за которые обучающийся может работать на станции ДДС.
@@ -50,12 +50,40 @@ export const DDS_SERVICES: DdsService[] = [
 
 export const serviceById = (id: string | undefined) => DDS_SERVICES.find((s) => id && s.id === id) ?? DDS_SERVICES[0];
 
+/** Сколько номеров преподаватель может завести на одну ДДС (пункт 8 рекомендаций) */
+export const MAX_PHONEBOOK = 10;
+
+/**
+ * Телефонный справочник учебного телефона. Если преподаватель завёл свой список в сценарии —
+ * показываем его, иначе штатные номера службы. Номер заявителя берётся из АОН карточки:
+ * перезвонить заявителю диспетчер вправе, но номер появляется, только если так решил преподаватель.
+ */
+export function runContacts(service: DdsService, scenario: Scenario | null): SoftphoneContact[] {
+  const own = scenario?.phonebook?.length
+    ? scenario.phonebook.slice(0, MAX_PHONEBOOK).map((p, i) => ({
+        id: `ph-${i}`,
+        title: p.title,
+        name: '',
+        number: p.number,
+        voice: p.voice,
+        isChief: p.isChief,
+      }))
+    : service.contacts;
+  const applicantNumber = scenario?.withApplicant ? (scenario.incident.phones.aon ?? '').trim() : '';
+  return applicantNumber
+    ? [...own, { id: 'applicant', title: 'Заявитель', name: scenario?.incident.applicant.name ?? '', number: applicantNumber, voice: 'female' as const }]
+    : own;
+}
+
 /**
  * Внешние организации, куда диспетчер может «передать информацию» по телефону.
  * В сценариях руководитель смены называет эти номера; звонок на них тоже фиксируется.
  */
 export const DIRECTORY: { number: string; title: string; voice: 'male' | 'female'; reply: string }[] = [
   { number: '2250', title: 'Диспетчерская ООО «Практика»', voice: 'female', reply: 'Диспетчерская «Практика», слушаю. Приняла, лифтёра направляем. Диспетчер Соколова.' },
+  // дом в управлении чужой УК: без этого номера передавать информацию некуда,
+  // а комментарий «информация передана» пришлось бы писать вслепую
+  { number: '2255', title: 'Диспетчерская УК «Домовой»', voice: 'female', reply: 'Диспетчерская УК «Домовой», слушаю. Информацию приняли, своего техника направим. Диспетчер Антонова.' },
   { number: '2260', title: 'Диспетчерская УК «ПИК-Комфорт»', voice: 'male', reply: 'Диспетчерская ПИК, принято, техника направим. Диспетчер Власов.' },
   { number: '2270', title: 'ГБУ «Автомобильные дороги»', voice: 'female', reply: 'Автодороги, дежурный слушает. Информацию приняли, передадим на участок.' },
   { number: '2280', title: 'ПАО «Ростелеком», аварийная служба', voice: 'male', reply: 'Ростелеком, аварийная. Принято, заявку зарегистрировали.' },

@@ -3,6 +3,7 @@ import { dialogueReply } from '../api/ai';
 import { peerReply, resolvePeer } from '../api/tutor';
 import { useNow } from '../app/hooks';
 import { IcClose, IcHangup, IcMic, IcPhone } from '../arm/icons';
+import { runContacts } from '../data/services';
 import { useRun } from '../store/training';
 import { cx } from '../ui/cx';
 import { phoneLabel, useSoftphone } from './softphoneStore';
@@ -114,10 +115,13 @@ export function Softphone() {
     };
   }, []);
 
-  const contacts = run.service.contacts;
+  // справочник занятия: список преподавателя, если он его завёл, иначе штатные номера службы
+  const scenario = run.current?.scenario ?? null;
+  const contacts = runContacts(run.service, scenario);
+  const phones = scenario?.phonebook ?? [];
 
   async function call(number: string) {
-    const peer = resolvePeer(number, contacts);
+    const peer = resolvePeer(number, contacts, phones);
     const seq = ++callSeq.current;
     const live = () => alive.current && callSeq.current === seq;
     sp.patch({ phase: 'ringing', number, peer, lines: [], connectedAt: null });

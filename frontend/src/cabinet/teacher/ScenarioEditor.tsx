@@ -20,11 +20,11 @@ import { correctScenario } from '../../api/tutor';
 import { navigate } from '../../app/router';
 import { IncidentCard } from '../../arm/IncidentCard';
 import { OWN_SERVICE_ID } from '../../data/scenarios';
-import { DDS_SERVICES } from '../../data/services';
+import { DDS_SERVICES, MAX_PHONEBOOK } from '../../data/services';
 import { SKILL_LABELS, SKILLS } from '../../domain/skills';
 import { nextStatuses } from '../../domain/statusMachine';
 import { literacyIssues } from '../../domain/text';
-import type { ApplicantStatus, Incident, ResponseStatus, Scenario, ScenarioInput, Skill } from '../../domain/types';
+import type { ApplicantStatus, Incident, ResponseStatus, Scenario, ScenarioInput, ScenarioPhone, Skill } from '../../domain/types';
 import { useMe } from '../../store/session';
 import { useRun } from '../../store/training';
 import { Badge, Button, Checkbox, ConfirmModal, Input, Notice, Panel, Select, Textarea } from '../../ui';
@@ -84,6 +84,15 @@ const textToGroups = (t: string) =>
         .filter(Boolean),
     )
     .filter((l) => l.length);
+
+/** Штатные номера службы как заготовка справочника: преподаватель правит их под занятие */
+const serviceDefaults = (kind: Scenario['serviceKind']): ScenarioPhone[] =>
+  (DDS_SERVICES.find((s) => s.kind === kind) ?? DDS_SERVICES[0]).contacts.map((c) => ({
+    title: c.name && c.name !== 'дежурный' && c.name !== 'бригадир' ? `${c.title}, ${c.name}` : c.title,
+    number: c.number,
+    voice: c.voice,
+    isChief: c.isChief,
+  }));
 
 export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
   const { user } = useMe();
@@ -165,6 +174,8 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
     setMsg(null);
   };
 
+  const phonebook = draft.phonebook ?? [];
+
   const collect = (): Scenario => {
     const services = servicesText
       .split(',')
@@ -191,6 +202,9 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
     if (!s.incident.type.finalType.trim()) return 'Укажите итоговый тип (класс) происшествия';
     if (!s.expected.path.length) return 'Задайте эталонные статусы';
     if (s.expected.callRequired && !s.expected.sampleReport.trim()) return 'Нужен эталонный доклад, раз звонок обязателен';
+    const phones = s.phonebook ?? [];
+    if (phones.some((p) => !p.title.trim() || !p.number.trim())) return 'В телефонном справочнике есть строка без названия или номера';
+    if (new Set(phones.map((p) => p.number)).size !== phones.length) return 'В телефонном справочнике повторяются номера';
     return null;
   };
 
@@ -384,6 +398,50 @@ export function ScenarioEditor({ id, nav }: { id: string; nav: NavItem[] }) {
                 value={draft.timeLimitSec ?? DEFAULT_TIME_LIMIT}
                 onChange={(e) => upd((d) => void (d.timeLimitSec = Math.max(30, Math.min(1800, Number(e.target.value) || DEFAULT_TIME_LIMIT))))}
               />
+            </div>
+            <div className="mt-3">
+              <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-[13px] font-medium">
+                  Телефонный справочник занятия
+                  <span className="ml-1.5 font-normal text-c-muted">кому обучающийся может позвонить, до {MAX_PHONEBOOK} номеров</span>
+                </div>
+                <div className="flex gap-1.5">
+                  {!phonebook.length && (
+                    <Button size="sm" onClick={() => upd((d) => void (d.phonebook = serviceDefaults(d.serviceKind)))}>
+                      взять номера службы
+                    </Button>
+                  )}
+                  {phonebook.length > 0 && phonebook.length < MAX_PHONEBOOK && (
+                    <Button size="sm" onClick={() => upd((d) => void (d.phonebook = [...(d.phonebook ?? []), { title: '', number: '', voice: 'male' }]))}>
+                      добавить номер
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {!phonebook.length ? (
+                <div className="text-[12px] text-c-muted">
+                  Список пуст — обучающийся увидит штатные номера своей службы. Нажмите «взять номера службы», чтобы задать их под занятие.
+                </div>
+              ) : (
+                <div className="grid gap-1.5">
+                  {phonebook.map((p, i) => (
+                    <div key={i} className="grid grid-cols-[1fr_110px_150px_auto] items-end gap-1.5">
+                      <Input placeholder="Кто отвечает" value={p.title} onChange={(e) => upd((d) => void (d.phonebook![i].title = e.target.value))} />
+                      <Input placeholder="Номер" value={p.number} onChange={(e) => upd((d) => void (d.phonebook![i].number = e.target.value.replace(/[^\d+*#]/g, '')))} />
+                      <Select value={p.voice} onChange={(e) => upd((d) => void (d.phonebook![i].voice = e.target.value as 'male' | 'female'))}>
+                        <option value="male">мужской голос</option>
+                        <option value="female">женский голос</option>
+                      </Select>
+                      <Button size="sm" onClick={() => upd((d) => void (d.phonebook = d.phonebook!.filter((_, j) => j !== i)))}>
+                        удалить
+                      </Button>
+                    </div>
+                  ))}
+                  <Checkbox checked={!!draft.withApplicant} onChange={(v) => upd((d) => void (d.withApplicant = v))}>
+                    Показать номер заявителя (АОН из карточки) — обучающийся сможет ему перезвонить
+                  </Checkbox>
+                </div>
+              )}
             </div>
             <div className="mt-3">
               <div className="mb-1.5 text-[13px] font-medium">Отрабатываемые навыки</div>
