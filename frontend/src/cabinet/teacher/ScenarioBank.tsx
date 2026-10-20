@@ -228,10 +228,16 @@ export function ScenarioBank() {
               let model = '';
               for (const [i, { draft, comp }] of items.entries()) {
                 if (stop.current) break;
-                setWorking(`ИИ пишет карточку ${i + 1} из ${items.length}…`);
-                // время ответа — часть объяснения: мгновенный ответ означает, что модель не звали
+                // время ответа — часть объяснения: мгновенный ответ означает, что модель не звали,
+                // а на слабом сервере карточка пишется минутами — показываем счёт секунд
                 const started = performance.now();
-                const sc = await composeScenario(draft, comp, difficulty).then(
+                const tick = () =>
+                  setWorking(
+                    `ИИ пишет карточку ${i + 1} из ${items.length}… ${Math.round((performance.now() - started) / 1000)} с`,
+                  );
+                tick();
+                const ticker = setInterval(tick, 1000);
+                const sc = await composeScenario(draft, comp, difficulty).finally(() => clearInterval(ticker)).then(
                   (r) => {
                     if (r.by === 'llm') {
                       model = model || r.model?.model_name || '';

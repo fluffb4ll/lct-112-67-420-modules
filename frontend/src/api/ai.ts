@@ -53,8 +53,12 @@ async function readJson<T>(res: Promise<Response>, timeoutMs: number): Promise<T
 const postJson = (path: string, body: unknown, timeoutMs?: number) =>
   aiFetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), timeoutMs });
 
-/** Сколько ждём языковую модель на один сценарий (на слабом сервере она пишет долго) */
-export const COMPOSE_TIMEOUT_MS = 120_000;
+/*
+ * Сколько ждём языковую модель на один сценарий. На слабом сервере она пишет минутами, а
+ * прерванная генерация пропадает целиком, поэтому ждать стоит до конца: контур кладёт на
+ * карточку до трёх минут, nginx — 200 с, здесь столько же.
+ */
+export const COMPOSE_TIMEOUT_MS = 200_000;
 
 /** Модель, которой отвечал контур; null — на сервере модель не подключена */
 export interface AiModelRef {
