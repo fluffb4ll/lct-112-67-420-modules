@@ -6,7 +6,9 @@
 
 Модель LLM подключается переменной `DDS_LLM_MODEL_PATH` (локальный GGUF, extra
 `ai[llm-llamacpp]`). Без неё руководитель работает на проверенном шаблоне (fallback, C-04), а
-семантические критерии получают «не проверено» — итог предварительный.
+семантические критерии получают «не проверено» — итог предварительный. Файла ещё нет (сервис
+models докачивает том) или загрузка упала — сервис пробует снова с растущей паузой
+(`dds_ai.backoff`), без перезапуска.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ import json
 import logging
 import os
 import threading
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,13 +29,15 @@ from pydantic import BaseModel, Field, TypeAdapter
 from starlette.concurrency import run_in_threadpool
 
 from dds_ai import __version__
+from dds_ai.backoff import Backoff
 from dds_ai.bridge.compose import compose_scenario
 from dds_ai.bridge.evaluate import evaluate_card
-from dds_ai.bridge.voice import MAX_AUDIO_BYTES, VoiceService, VoiceUnavailable
+from dds_ai.bridge.voice import AudioTooLarge, VoiceService, VoiceUnavailable
 from dds_ai.contracts import CONTRACTS_VERSION, SCHEMA_MODELS
 from dds_ai.contracts.events import DispatcherDecision, attempt_event_adapter
 from dds_ai.contracts.rubric import Rubric
 from dds_ai.cycle import Channel, TrainingSession, load_synthetic
+from dds_ai.llm.errors import LLMBusy
 from dds_ai.ports import LLMProvider, SemanticJudge
 
 log = logging.getLogger(__name__)
@@ -76,23 +82,88 @@ class Submit(BaseModel):
     incomplete: bool = False
 
 
-def _load_models() -> tuple[LLMProvider | None, SemanticJudge | None]:
-    """LLM из DDS_LLM_MODEL_PATH. Нет файла или пакета — сервис работает на правилах."""
+Models = tuple[LLMProvider | None, SemanticJudge | None]
+
+
+def _llm_threads() -> int:
+    """Потоки llama.cpp: DDS_LLM_N_THREADS или все доступные процессу ядра.
+
+    Без явного числа llama-cpp-python берёт половину ядер: на стенде с 2 vCPU это один поток.
+    """
+    raw = os.environ.get("DDS_LLM_N_THREADS", "").strip()
+    if raw:
+        return max(1, int(raw))
+    affinity = getattr(os, "sched_getaffinity", None)
+    return max(1, len(affinity(0)) if affinity else os.cpu_count() or 1)
+
+
+def _load_models() -> Models:
+    """LLM из DDS_LLM_MODEL_PATH; не задана — (None, None). Нет файла, пакета, сбой — исключение."""
     path = os.environ.get("DDS_LLM_MODEL_PATH")
     if not path:
         return None, None
     if not Path(path).is_file():
-        log.warning("LLM не загружена: нет файла %s — оценка и сценарии по правилам", path)
-        return None, None
-    try:
-        from dds_ai.judging import LLMSemanticJudge
-        from dds_ai.llm.llamacpp_provider import LlamaCppProvider
+        raise FileNotFoundError(f"нет файла {path}")
+    from dds_ai.judging import LLMSemanticJudge
+    from dds_ai.llm.llamacpp_provider import LlamaCppProvider
 
-        llm = LlamaCppProvider(path, n_ctx=int(os.environ.get("DDS_LLM_N_CTX", "4096")))
-    except Exception as exc:
-        log.warning("LLM не загружена (%s) — оценка и сценарии по правилам", exc)
-        return None, None
+    llm = LlamaCppProvider(
+        path,
+        model_name=os.environ.get("DDS_LLM_MODEL_NAME") or None,
+        n_ctx=int(os.environ.get("DDS_LLM_N_CTX", "4096")),
+        n_threads=_llm_threads(),
+    )
     return llm, LLMSemanticJudge(llm)
+
+
+class LazyModels:
+    """LLM и судья: загрузка при создании и, если не вышло, повтор с растущей паузой.
+
+    Повтор делает запрос, пришедший после паузы (без фоновых потоков); пока одна загрузка идёт,
+    остальные запросы её не ждут и считают по правилам. Модель задана явно — без загрузчика.
+    """
+
+    def __init__(
+        self,
+        loader: Callable[[], Models] | None,
+        clock: Callable[[], float] = time.monotonic,
+        models: Models = (None, None),
+    ):
+        self._loader = loader
+        self._retry = Backoff(clock)
+        self._loading = threading.Lock()
+        self.llm, self.judge = models
+        self.get()
+
+    def get(self) -> Models:
+        if (
+            self.llm is None
+            and self._loader is not None
+            and not self._retry.waiting()
+            and self._loading.acquire(blocking=False)
+        ):
+            try:
+                self._load(self._loader)
+            finally:
+                self._loading.release()
+        return self.llm, self.judge
+
+    def _load(self, loader: Callable[[], Models]) -> None:
+        try:
+            llm, judge = loader()
+        except Exception as exc:
+            self._retry.failed()
+            log.warning(
+                "LLM не загружена (%s) — оценка и сценарии по правилам, повтор через %g с",
+                exc,
+                self._retry.delay_s,
+            )
+            return
+        if llm is None:
+            self._loader = None  # модель не задана — пробовать нечего
+            return
+        self._retry.succeeded()
+        self.llm, self.judge = llm, judge
 
 
 def _dump(obj: Any) -> Any:
@@ -106,9 +177,11 @@ def create_app(
     llm: LLMProvider | None = None,
     judge: SemanticJudge | None = None,
     voice: VoiceService | None = None,
+    load_models: Callable[[], Models] = _load_models,
+    clock: Callable[[], float] = time.monotonic,
 ) -> FastAPI:
-    if llm is None and judge is None:
-        llm, judge = _load_models()
+    explicit = llm is not None or judge is not None
+    models = LazyModels(None if explicit else load_models, clock, (llm, judge))
     voice = voice or VoiceService()
     rubric = Rubric.model_validate(json.loads((CONFIG / "rubric.w01.json").read_text("utf-8")))
     scenarios = load_synthetic()
@@ -137,7 +210,7 @@ def create_app(
             "status": "ok",
             "version": __version__,
             "contracts_version": CONTRACTS_VERSION,
-            "llm": None if llm is None else _dump(llm.model_ref),
+            "llm": None if models.llm is None else _dump(models.llm.model_ref),
         }
 
     # --- мост к бэкенду (backend/.../client/AiEvaluationClient.java) ---
@@ -154,6 +227,7 @@ def create_app(
                 "running": 0,
             }
 
+        llm, _ = models.get()
         return {
             "profile": "offline",
             "components": [
@@ -166,6 +240,7 @@ def create_app(
     @app.post("/api/v1/ai/evaluate")
     def evaluate_submitted_card(body: dict[str, Any]) -> dict[str, Any]:
         # sync-обработчик: FastAPI выполняет его в пуле потоков, LLM не блокирует цикл событий
+        llm, _ = models.get()
         try:
             return evaluate_card(body, llm)
         except Exception:
@@ -179,8 +254,14 @@ def create_app(
 
     @app.post("/v1/scenarios/compose")
     def compose(body: dict[str, Any]) -> dict[str, Any]:
+        llm, _ = models.get()
         try:
             return compose_scenario(body, llm)
+        except LLMBusy as exc:
+            # фронт на любой ошибке оставляет текст шаблона; 503 — честнее, чем «by: template»
+            raise HTTPException(
+                503, "языковая модель занята другим запросом — повторите позже"
+            ) from exc
         except (ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
             raise HTTPException(422, f"bad scenario draft: {exc}") from exc
 
@@ -191,19 +272,25 @@ def create_app(
     @app.post("/v1/stt")
     async def stt(request: Request, hints: str = "") -> dict[str, Any]:
         # тело — сама запись (audio/webm, ogg, wav): без multipart, чтобы не тянуть зависимость
-        if int(request.headers.get("content-length") or 0) > MAX_AUDIO_BYTES:
-            raise HTTPException(413, "запись слишком длинная")
+        limit = voice.max_audio_bytes
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            declared = 0
+        if declared > limit:
+            raise HTTPException(413, str(AudioTooLarge(limit)))
         chunks: list[bytes] = []
         size = 0
         async for chunk in request.stream():
             size += len(chunk)
-            if size > MAX_AUDIO_BYTES:
-                raise HTTPException(413, "запись слишком длинная")
+            if size > limit:
+                raise HTTPException(413, str(AudioTooLarge(limit)))
             chunks.append(chunk)
         audio = b"".join(chunks)
         try:
-            words = [h for h in hints.split(",") if h]
-            return await run_in_threadpool(voice.transcribe, audio, words)
+            return await run_in_threadpool(voice.transcribe, audio, hints.split(","))
+        except AudioTooLarge as exc:
+            raise HTTPException(413, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         except VoiceUnavailable as exc:
@@ -242,6 +329,7 @@ def create_app(
         scenario = scenarios.get(body.scenario_id)
         if scenario is None:
             raise HTTPException(404, "unknown scenario")
+        llm, judge = models.get()
         s = TrainingSession(
             scenario,
             channel=Channel.TEXT,

@@ -4,6 +4,7 @@ import { useNow } from '../app/hooks';
 import { ArmHeader } from '../arm/ArmHeader';
 import { IncidentCard } from '../arm/IncidentCard';
 import { Journal } from '../arm/Journal';
+import { operatorLabel } from '../domain/format';
 import { useRun } from '../store/training';
 import { Button, ConfirmModal, Modal } from '../ui';
 import { ResultModal } from './ResultModal';
@@ -74,9 +75,7 @@ export function ArmRun({ incidentId, homePath }: { incidentId?: string; homePath
     else setAsk('finish');
   };
 
-  const u = run.user;
-  const initials = u.fullName.split(' ');
-  const userLabel = `оп. ${u.operatorNum ?? '—'}, ${initials[0]} ${initials[1]?.[0] ?? ''} ${initials[2]?.[0] ?? ''}`.trim();
+  const userLabel = operatorLabel(run.user.fullName, run.user.operatorNum);
 
   return (
     <div className="flex h-full min-w-[1180px] flex-col">

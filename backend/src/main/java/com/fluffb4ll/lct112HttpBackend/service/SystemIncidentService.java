@@ -6,6 +6,7 @@ import com.fluffb4ll.lct112HttpBackend.entity.SystemIncidentEntity;
 import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.IncidentComponent;
 import com.fluffb4ll.lct112HttpBackend.model.enums.IncidentSeverity;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.repository.SystemIncidentRepository;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.transaction.Transactional;
@@ -51,7 +52,7 @@ public class SystemIncidentService {
     ) throws AuthenticationException {
         UserEntity currentUser = authService.verifyAuthToken(token, null);
         if (currentUser == null || currentUser.getRole() == null || !"ROLE_ADMIN".equals(currentUser.getRole().getName())) {
-            throw new AuthenticationException("Only administrators can view system incidents");
+            throw new ForbiddenException("You do not have permission to view system incidents: administrators only");
         }
 
         int validatedSize = Math.clamp(size, 1, 100);

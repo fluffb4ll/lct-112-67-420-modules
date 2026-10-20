@@ -16,11 +16,11 @@ import {
   type RoleDto,
   type UserTableRow,
 } from '../../api/admin';
-import { BACKEND_PERMISSIONS, type DepartmentDto, type UserInfoDto } from '../../api/auth';
+import { BACKEND_PERMISSIONS, roleLabel, type DepartmentDto, type UserInfoDto } from '../../api/auth';
 import { describeError } from '../../api/errors';
-import { ApiError } from '../../api/http';
+import { isPermissionDenied } from '../../api/http';
 import { useMe } from '../../store/session';
-import { Badge, Button, Checkbox, ConfirmModal, Input, Modal, Notice, Panel, Select, Table } from '../../ui';
+import { Badge, Button, ConfirmModal, Input, Modal, Notice, Panel, Select, Table } from '../../ui';
 
 /*
  * Учётные записи — через бэкенд (/api/admin/users/*): список страницами, создание,
@@ -43,8 +43,8 @@ async function loadAll(page: number): Promise<{
     const [users, roles, departments] = await Promise.all([listUsers(page), listRoles(), listDepartments()]);
     return { users, roles, departments };
   } catch (e) {
-    // 401 здесь означает нехватку прав: истёкшую сессию перехватывает http.ts и возвращает на вход
-    const denied = e instanceof ApiError && e.status === 401;
+    // нехватка прав: 403, у старого бэкенда — 401 с «permission» (истёкшую сессию перехватывает http.ts)
+    const denied = isPermissionDenied(e);
     return { users: null, roles: null, departments: null, error: describeError(e, 'Не удалось загрузить данные'), denied };
   }
 }
@@ -92,7 +92,7 @@ export function Users() {
   }, [apply, page]);
 
   const roleName = (roleId: number) => (Array.isArray(roles) ? roles : KNOWN_ROLES).find((r) => r.id === roleId)?.name ?? `роль ${roleId}`;
-  const isAdmin = (u: UserTableRow) => /ADMIN/i.test(u.roleName);
+  const isAdmin = (u: UserTableRow) => /ADMIN|администратор/i.test(u.roleName);
   const editable = (u: UserTableRow) => u.id !== info?.id && (!isAdmin(u) || canEditAdmins);
 
   const run = async (action: () => Promise<void>, ok: string) => {
@@ -154,7 +154,7 @@ export function Users() {
               {rows.map((u) => (
                 <tr key={u.id}>
                   <td>{u.fullName}</td>
-                  <td className="text-[13px]">{u.roleName}</td>
+                  <td className="text-[13px]">{roleLabel(u.roleName)}</td>
                   <td className="text-[12px] text-c-muted">{u.departmentName ?? '—'}</td>
                   <td>{u.isActive ? <Badge tone="ok">активен</Badge> : <Badge tone="bad">заблокирован</Badge>}</td>
                   <td>
@@ -235,9 +235,9 @@ export function Users() {
         <PasswordModal
           target={pwdFor}
           onClose={() => setPwdFor(null)}
-          onSave={(password, mustChange) => {
+          onSave={(password) => {
             setPwdFor(null);
-            void run(() => updateUser({ userId: pwdFor.id, password, mustChangePassword: mustChange }), `Пароль ${pwdFor.fullName} изменён`);
+            void run(() => updateUser({ userId: pwdFor.id, password }), `Пароль ${pwdFor.fullName} изменён`);
           }}
         />
       )}
@@ -316,7 +316,7 @@ function UserCard({ row, onClose }: { row: UserTableRow; onClose: () => void }) 
       {data && (
         <div className="flex flex-col">
           {line('Логин', data.username)}
-          {line('Роль', data.role)}
+          {line('Роль', roleLabel(data.role))}
           {line('Права', data.permissions.length ? data.permissions.join(', ') : 'нет')}
           {line('Подразделение', data.department?.name ?? '—')}
           {line('Учебные группы', data.studyGroups?.length ? data.studyGroups.map((g) => g.name).join(', ') : '—')}
@@ -350,7 +350,6 @@ function CreateUser({
     // по умолчанию обучающийся: администратора выбирают осознанно
     roleId: (availableRoles.find((r) => r.id === STUDENT_ROLE_ID) ?? availableRoles.find((r) => r.id !== ADMIN_ROLE_ID) ?? availableRoles[0])?.id ?? STUDENT_ROLE_ID,
     departmentId: null,
-    mustChangePassword: true,
   });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -358,7 +357,7 @@ function CreateUser({
 
   const validate = (): string | null => {
     if (!RULES.username.test(form.username)) return 'Логин: латинские буквы, цифры, точка, дефис или подчёркивание, до 16 символов';
-    if (!RULES.fullName.test(form.fullName.trim())) return 'ФИО: только русские или латинские буквы, пробел и апостроф (буква «ё» и дефис пока не принимаются сервером)';
+    if (!RULES.fullName.test(form.fullName.trim())) return 'ФИО: только русские или латинские буквы, пробел, апостроф и дефис';
     if (!RULES.password.test(form.password)) return 'Пароль: не короче 8 символов, обязательно латинские буквы и цифры';
     if (!Number.isInteger(form.roleId) || form.roleId < 0) return 'Укажите роль';
     if (form.roleId === ADMIN_ROLE_ID && !canEditAdmins) return 'Недостаточно прав для создания администратора';
@@ -399,7 +398,7 @@ function CreateUser({
         {err && <Notice tone="bad">{err}</Notice>}
         <Input label="ФИО" value={form.fullName} onChange={(e) => set({ fullName: e.target.value })} />
         <div className="grid gap-3 sm:grid-cols-2">
-          <Input label="Логин" hint="латиница, до 16 символов" value={form.username} onChange={(e) => set({ username: e.target.value.trim() })} autoComplete="off" />
+          <Input label="Логин" hint="латиница, до 16 символов" maxLength={16} value={form.username} onChange={(e) => set({ username: e.target.value.trim() })} autoComplete="off" />
           <Input label="Пароль" hint="от 8 символов, буквы и цифры" type="password" value={form.password} onChange={(e) => set({ password: e.target.value })} autoComplete="new-password" />
         </div>
         <Select
@@ -424,17 +423,13 @@ function CreateUser({
             ))}
           </Select>
         )}
-        <Checkbox checked={form.mustChangePassword} onChange={(v) => set({ mustChangePassword: v })}>
-          Потребовать сменить пароль при первом входе
-        </Checkbox>
       </div>
     </Modal>
   );
 }
 
-function PasswordModal({ target, onClose, onSave }: { target: UserTableRow; onClose: () => void; onSave: (password: string, mustChange: boolean) => void }) {
+function PasswordModal({ target, onClose, onSave }: { target: UserTableRow; onClose: () => void; onSave: (password: string) => void }) {
   const [pwd, setPwd] = useState('');
-  const [mustChange, setMustChange] = useState(true);
   const [err, setErr] = useState('');
   return (
     <Modal
@@ -448,7 +443,7 @@ function PasswordModal({ target, onClose, onSave }: { target: UserTableRow; onCl
           <Button
             variant="success"
             className="h-10 px-4 text-[15px] font-bold"
-            onClick={() => (RULES.password.test(pwd) ? onSave(pwd, mustChange) : setErr('Пароль: не короче 8 символов, обязательно латинские буквы и цифры'))}
+            onClick={() => (RULES.password.test(pwd) ? onSave(pwd) : setErr('Пароль: не короче 8 символов, обязательно латинские буквы и цифры'))}
           >
             сохранить
           </Button>
@@ -458,9 +453,6 @@ function PasswordModal({ target, onClose, onSave }: { target: UserTableRow; onCl
       <div className="flex flex-col gap-3">
         {err && <Notice tone="bad">{err}</Notice>}
         <Input label="Новый пароль" type="password" value={pwd} onChange={(e) => setPwd(e.target.value)} autoComplete="new-password" />
-        <Checkbox checked={mustChange} onChange={setMustChange}>
-          Потребовать сменить пароль при следующем входе
-        </Checkbox>
       </div>
     </Modal>
   );

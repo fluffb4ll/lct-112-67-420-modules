@@ -18,6 +18,8 @@ export interface Norms {
 }
 
 export const DEFAULT_NORMS: Norms = { openSec: 30, totalSec: 180, passScore: 70 };
+/** От этого балла при зачёте рекомендация без упрёка — только для закрепления (как NEAR_FULL_SCORE в ai) */
+const NEAR_FULL_SCORE = 90;
 
 function lcs(a: string[], b: string[]): number {
   const dp = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
@@ -25,6 +27,15 @@ function lcs(a: string[], b: string[]): number {
     for (let j = 1; j <= b.length; j++)
       dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
   return dp[a.length][b.length];
+}
+
+/**
+ * round() как в Python (половина — к чётному): ИИ-контур считает баллы так же (bridge/rules.py),
+ * и при Math.round 4 + 4,5 давало бы 9 вместо 8.
+ */
+export function pyRound(x: number): number {
+  const r = Math.round(x);
+  return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
 }
 
 export function evaluateDds(
@@ -57,7 +68,7 @@ export function evaluateDds(
     let detail = 'Карточка не была открыта';
     if (openSec !== null) {
       points = openSec <= norms.openSec ? max : openSec <= norms.openSec * 2 ? 5 : 0;
-      detail = `Открыта через ${Math.round(openSec)} с при нормативе ${norms.openSec} с`;
+      detail = `Открыта через ${pyRound(openSec)} с при нормативе ${norms.openSec} с`;
     }
     checks.push({ id: 'open_time', title: 'Своевременное открытие карточки', ok: points === max, points, max, detail, ref: 'Памятка, стр. 5, 21', skill: 'timing' });
   }
@@ -65,7 +76,8 @@ export function evaluateDds(
   // 2. Первичный статус
   {
     const max = 30;
-    const want = exp.path[0];
+    // пустой эталонный путь — как в ai (bridge/rules.py): ждём «Принята»
+    const want: ResponseStatus = exp.path[0] ?? 'Принята';
     const skill: Skill = scenario.skills.includes('duplicate') ? 'duplicate' : want === 'Не принята' ? 'zone' : 'profile';
     let points = 0;
     let detail: string;
@@ -100,8 +112,16 @@ export function evaluateDds(
     const max = 15;
     const { hit, missing } = matchGroups(allComments, exp.commentMustMention);
     const total = exp.commentMustMention.length;
-    const points = total === 0 ? max : Math.round((hit / total) * max);
-    const skill: Skill = scenario.skills.includes('refusal_comment') ? 'refusal_comment' : scenario.skills.includes('work_progress') ? 'work_progress' : 'profile';
+    const points = total === 0 ? max : pyRound((hit / total) * max);
+    // неполный комментарий — не «Профильные происшествия»: при верном «Принята» это ход работ (как в ai)
+    const want: ResponseStatus = exp.path[0] ?? 'Принята';
+    const skill: Skill = scenario.skills.includes('refusal_comment')
+      ? 'refusal_comment'
+      : scenario.skills.includes('work_progress')
+        ? 'work_progress'
+        : COMMENT_REQUIRED.includes(want)
+          ? 'refusal_comment'
+          : 'work_progress';
     const detail =
       total === 0
         ? 'Особых требований к тексту нет'
@@ -116,7 +136,8 @@ export function evaluateDds(
     const max = 15;
     const common = lcs(path, exp.path);
     const extra = path.filter((s) => !exp.path.includes(s));
-    let points = Math.round((common / exp.path.length) * max);
+    // пустой эталон давал NaN во всём балле; в ai за пустой эталон — полный балл
+    let points = exp.path.length ? pyRound((common / exp.path.length) * max) : max;
     if (extra.length) points = Math.max(0, points - 5);
     const detail =
       `Проставлено: ${path.length ? path.map((s) => `«${s}»`).join(' → ') : '—'}. Эталон: ${exp.path.map((s) => `«${s}»`).join(' → ')}` +
@@ -138,9 +159,10 @@ export function evaluateDds(
       points = 0;
       detail = 'Не было доклада руководителю смены';
     } else {
-      const { hit, missing } = matchGroups(transcript, exp.reportMustMention);
+      // доклад звучит по телефону и приходит из распознавания речи — корни нечётко, как на сервере
+      const { hit, missing } = matchGroups(transcript, exp.reportMustMention, { fuzzy: true });
       const total = exp.reportMustMention.length || 1;
-      points = 4 + Math.round((hit / total) * 6);
+      points = 4 + pyRound((hit / total) * 6);
       detail = missing.length ? `В докладе не прозвучало: ${missing.map((g) => `«${g[0]}…»`).join(', ')}` : 'Доклад содержит всё необходимое';
     }
     checks.push({ id: 'report_call', title: 'Доклад руководителю', ok: points === max, points, max, detail, ref: 'Q&A заказчика, п. 6', skill: 'report' });
@@ -156,7 +178,7 @@ export function evaluateDds(
       ok: points === max,
       points,
       max,
-      detail: `${Math.round(totalSec)} с при нормативе ${norms.totalSec} с`,
+      detail: `${pyRound(totalSec)} с при нормативе ${norms.totalSec} с`,
       ref: 'Q&A заказчика, п. 13',
       skill: 'timing',
     });
@@ -176,7 +198,9 @@ export function evaluateDds(
 
   // Главная ошибка — проверка с наибольшей потерей баллов
   const worst = [...checks].sort((a, b) => b.max - b.points - (a.max - a.points))[0];
-  const weak: Skill = worst && worst.points < worst.max ? worst.skill : scenario.skills[0] ?? 'timing';
+  // при полном балле слабого навыка нет — не советуем «подтянуть» первый навык сценария (как в ai)
+  const hasWeak = !!worst && worst.points < worst.max;
+  const weak: Skill = hasWeak ? worst.skill : scenario.skills[0] ?? 'timing';
 
   const summary =
     score >= 90
@@ -200,7 +224,11 @@ export function evaluateDds(
     summary,
     recommendation: {
       skill: weak,
-      text: `Подтяните навык «${SKILL_LABELS[weak]}». ${SKILL_ADVICE[weak]}`,
+      text: !hasWeak
+        ? 'Замечаний нет — переходите к сценариям сложнее.'
+        : passed && score >= NEAR_FULL_SCORE
+          ? `Результат почти полный; для закрепления — навык «${SKILL_LABELS[weak]}». ${SKILL_ADVICE[weak]}`
+          : `Подтяните навык «${SKILL_LABELS[weak]}». ${SKILL_ADVICE[weak]}`,
       nextScenarioId: pickNext(weak),
     },
     predicted,

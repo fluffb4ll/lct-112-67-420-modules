@@ -57,3 +57,12 @@ python run_llm_bench.py --provider llamacpp --model /tmp/tiny.gguf --n-ctx 8192 
 
 Замер на крошечной модели показывает, что путь через runtime работает. О задержке или
 качестве настоящей LLM он ничего не говорит.
+
+## Судья доклада на стенде
+
+`run_judge_bench.py` — 30 кейсов судьи доклада руководителю. `stand-bench.sh` гоняет его
+на стенде временным контейнером `docker run --rm` (образ и том с моделью берёт у рабочего
+контейнера `dds-ai`, сам его не трогает): флаг `DDS_JUDGE_REPORT_FACTS` 0 и 1, все ядра,
+пиковая память по `docker stats`. Запуск на сервере — `bash ai/bench/stand-bench.sh`,
+с машины разработчика — `bash ai/bench/stand-bench.sh --ssh user@host --port 738`;
+`--dry-run` печатает команды без запуска.

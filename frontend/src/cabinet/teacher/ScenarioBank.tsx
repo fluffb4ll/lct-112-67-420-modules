@@ -18,6 +18,7 @@ import { navigate } from '../../app/router';
 import { ddmmyyyy } from '../../domain/format';
 import { useMe } from '../../store/session';
 import { Badge, Button, Checkbox, Empty, Input, Modal, Notice, Panel, Select, Table, Tabs } from '../../ui';
+import { composeAndSave, generateMessage, noticesAfterLoad, type BankNotices, type GenerateOutcome } from './composeNote';
 import { STATUS_LABELS } from './labels';
 
 /*
@@ -51,13 +52,13 @@ export function ScenarioBank() {
   const [data, setData] = useState<Loaded<PageResponse<ScenarioRow>>>('loading');
   const [categories, setCategories] = useState<IncidentCategory[] | null>(null);
   const [gen, setGen] = useState(false);
-  const [msg, setMsg] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null);
+  const [notices, setNotices] = useState<BankNotices>({ load: null, generate: null });
 
   const canEdit = !!info?.permissions.includes(PERMISSION_EDIT_SCENARIOS);
 
   const apply = useCallback((r: Awaited<ReturnType<typeof load>>) => {
     setData(r.list);
-    setMsg((m) => (r.error ? { tone: 'bad', text: r.error } : m?.tone === 'bad' ? null : m));
+    setNotices((n) => noticesAfterLoad(n, r.error));
   }, []);
 
   const reload = useCallback(() => load(filter, search, page).then(apply), [apply, filter, search, page]);
@@ -94,7 +95,14 @@ export function ScenarioBank() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="primary" disabled={!canEdit} onClick={() => setGen(true)}>
+        <Button
+          variant="primary"
+          disabled={!canEdit}
+          onClick={() => {
+            setNotices((n) => ({ ...n, generate: null }));
+            setGen(true);
+          }}
+        >
           Сгенерировать ИИ
         </Button>
         <Button disabled={!canEdit} onClick={() => navigate('/teacher/bank/new')}>
@@ -111,7 +119,17 @@ export function ScenarioBank() {
         />
       </div>
 
-      {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+      {notices.load && <Notice tone="bad">{notices.load}</Notice>}
+      {notices.generate && (
+        <Notice tone={notices.generate.tone}>
+          <div className="flex items-start gap-2">
+            <span className="flex-1">{notices.generate.text}</span>
+            <button type="button" className="text-arm-muted hover:text-arm-text" aria-label="Закрыть сообщение" onClick={() => setNotices((n) => ({ ...n, generate: null }))}>
+              ×
+            </button>
+          </div>
+        </Notice>
+      )}
       {!canEdit && data !== null && <Notice tone="warn">У вашей роли нет права на работу со сценариями (TEACHER_CAN_EDIT_SCENARIOS) — банк доступен только для просмотра.</Notice>}
       {data === null && (
         <Notice tone="warn">
@@ -191,21 +209,11 @@ export function ScenarioBank() {
           categories={categories}
           authorId={user.id}
           onClose={() => setGen(false)}
-          onDone={(n, failed, byTemplate) => {
+          onDone={(outcome, total) => {
             setGen(false);
             setFilter('DRAFT');
             setPage(0);
-            setMsg(
-              failed
-                ? { tone: 'bad', text: `Сохранено черновиков: ${n}. Не удалось сохранить: ${failed}.` }
-                : {
-                    tone: 'ok',
-                    text:
-                      `Сгенерировано черновиков: ${n}` +
-                      (byTemplate ? ` (для ${byTemplate} ИИ-контур не ответил — текст из шаблона классификатора)` : ', текст написан ИИ') +
-                      '. Проверьте эталон и утвердите — после этого сценарии попадут в общий банк.',
-                  },
-            );
+            setNotices((n) => ({ ...n, generate: generateMessage(outcome, total) }));
             void reload();
           }}
         />
@@ -223,7 +231,7 @@ function GenerateModal({
   categories: IncidentCategory[] | null;
   authorId: string;
   onClose: () => void;
-  onDone: (saved: number, failed: number, byTemplate: number) => void;
+  onDone: (outcome: GenerateOutcome, total: number) => void;
 }) {
   const [c, setC] = useState<Classifier | null>(null);
   const [group, setGroup] = useState('');
@@ -265,42 +273,23 @@ function GenerateModal({
     setBusy(true);
     setErr('');
     const list = generateScenarios(c, { group, difficulty, complications: comps, count, authorId });
-    let saved = 0;
-    let failed = 0;
-    let byTemplate = 0;
-    for (const [i, draft] of list.entries()) {
-      if (closed.current) break;
-      setProgress(`ИИ пишет сценарий ${i + 1} из ${list.length}…`);
-      // текст пишет языковая модель ИИ-контура; контур недоступен — остаётся текст шаблона.
-      // Пометка «Сгенерирован ИИ» — только если текст действительно написала модель
-      const comp = (comps.length ? comps : (['none'] as Complication[]))[i % Math.max(comps.length, 1)];
-      const sc = await composeScenario(draft, comp, difficulty).then(
-        (r) => {
-          if (r.by === 'llm') return { ...r.scenario, origin: 'generated' as const };
-          byTemplate++;
-          return { ...r.scenario, origin: 'teacher' as const };
-        },
-        () => {
-          byTemplate++;
-          return { ...draft, origin: 'teacher' as const };
-        },
-      );
-      if (closed.current) break;
-      try {
+    const outcome = await composeAndSave(list, {
+      // текст пишет языковая модель ИИ-контура; контур недоступен — остаётся текст шаблона
+      compose: (draft, i) => composeScenario(draft, (comps.length ? comps : (['none'] as Complication[]))[i % Math.max(comps.length, 1)], difficulty),
+      save: async (sc) => {
         const { scenarioId } = await createScenarioOnServer(toBody(sc, chosen));
         // зеркалим в локальные данные: занятия и тренажёр пока работают на них
         mutate((d) => d.scenarios.unshift({ ...sc, id: scenarioId }));
-        saved++;
-      } catch (e) {
-        failed++;
-        setErr(describeError(e, 'Не удалось сохранить сценарий'));
-      }
-    }
+      },
+      closed: () => closed.current,
+      onProgress: (i) => setProgress(`ИИ пишет сценарий ${i + 1} из ${list.length}…`),
+      onSaveError: (e) => setErr(describeError(e, 'Не удалось сохранить сценарий')),
+    });
     if (!closed.current) {
       setBusy(false);
       setProgress('');
     }
-    if (saved) onDone(saved, failed, byTemplate);
+    if (outcome.saved || (outcome.stoppedByLimit && !closed.current)) onDone(outcome, list.length);
   };
 
   return (

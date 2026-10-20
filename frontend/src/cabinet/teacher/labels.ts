@@ -9,6 +9,7 @@ export const STATUS_LABELS: Record<ScenarioStatus, string> = {
 export const ORIGIN_LABELS: Record<ScenarioOrigin, string> = {
   dataset: 'Методические материалы',
   generated: 'Сгенерирован ИИ',
+  template: 'Сгенерирован по шаблону',
   teacher: 'Создан преподавателем',
   student: 'Карточка обучающегося',
 };

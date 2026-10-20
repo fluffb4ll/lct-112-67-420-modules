@@ -71,6 +71,21 @@ public class AuthController {
         }
     }
 
+    /**
+     * Кто вошёл по куке. Кука одна на весь браузер, а фронт помнит пользователя в каждой вкладке отдельно,
+     * поэтому после входа в другой вкладке фронт сверяется здесь. Отказы — 401, как в /check.
+     */
+    @GetMapping("/me")
+    public ResponseEntity<UserInfoDto> me(@CookieValue(name = "AUTH_TOKEN", required = false) String token) {
+        if (token == null || token.isBlank())
+            return ResponseEntity.status(401).build();
+        try {
+            return ResponseEntity.ok(authService.currentUser(UUID.fromString(token)));
+        } catch (IllegalArgumentException | AuthenticationException | AuthTokenExpiredException e) {
+            return ResponseEntity.status(401).build();
+        }
+    }
+
 //    @PostMapping("/signup")
 //    public ResponseEntity<SignupResponseDto> signup(@RequestBody LoginRequestDto authDto) {
 //            return ResponseEntity.ok(authService.signup(authDto.username(), authDto.password()));

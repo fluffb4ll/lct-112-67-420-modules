@@ -48,7 +48,7 @@ export function ArmHeader({ userLabel, onSearch, onExit }: { userLabel: string; 
         <div className="min-w-0">
           <div className="text-[15px] font-bold whitespace-nowrap">{armHeaderDate(d)}</div>
           <div className="mt-1 flex items-center gap-2 text-[12px] text-[#dfe3e6]">
-            <span className="truncate">, {userLabel}</span>
+            <span className="truncate">{userLabel}</span>
             <IcMonitor size={13} />
             <IcGear size={13} />
             <IcHelp size={13} />

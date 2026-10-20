@@ -71,14 +71,116 @@ _CAPS_ALLOWED = {"ГОРМОСТ", "МОСЛИФТ", "ЖИЛИЩНИК"}
 
 
 def normalize(text: str) -> str:
+    """Нижний регистр, «ё» → «е», знаки из `_PUNCT` — пробел, пробелы схлопнуты, края обрезаны.
+
+    Прочие символы (цифры, «№», «/», латиница) остаются как есть.
+    """
     t = text.lower().replace("ё", "е")
     return _SPACES.sub(" ", _PUNCT.sub(" ", t)).strip()
 
 
-def match_groups(text: str, groups: list[list[str]]) -> tuple[int, list[list[str]]]:
-    """Группа синонимов (корней) упомянута, если в тексте есть хотя бы один её корень."""
+# Звуки, которые распознавание речи путает в докладах (замерено на faster-whisper small):
+# з/с в начале слова («состревание») и безударные гласные о/а, е/и, я/и («застриване»,
+# «застрял»). Другие пары звонких и глухих (д/т, б/п, г/к, ж/ш, в/ф) не нужны ни одному
+# кейсу, а склеивают разные слова («коричневая» → «горяч», «отрезали» → «адрес»).
+_FOLD = str.maketrans("зоея", "саии")
+FUZZY_MIN_STEM = 5
+# с какой длины корня прощается одна правка (вставка, пропуск, замена) после свёртки
+FUZZY_EDIT_MIN_STEM = 8
+# сколько свёрнутых звуков (букв, различных до свёртки и равных после) прощается сверх правок:
+# в корне из 5 букв два звука — уже другое слово («мошен…» → «машин»: о/а и е/и), а «состре…»
+# → «застре» (з/с и о/а) нужны два
+FUZZY_MAX_FOLDED_SHORT = 1  # корень из FUZZY_MIN_STEM букв
+FUZZY_MAX_FOLDED = 2
+# Короткие корни, которые STT стабильно слышит как другое слово (замерено на faster-whisper
+# small: «в лифте» → «в листе»). Засчитывается только замена с окончанием из
+# SOUNDALIKE_ENDINGS — предложный падеж «в/на листе»: голое «лист», «листа», «листок» — бумага.
+STT_SOUNDALIKES: dict[str, tuple[str, ...]] = {"лифт": ("лист",)}
+SOUNDALIKE_ENDINGS = frozenset({"е"})
+
+
+def _levenshtein(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _fuzzy_hit(words: list[str], stem: str) -> bool:
+    """Корень узнан в слове с ошибкой распознавания (шаги 3–4 из `match_groups`)."""
+    for alt in STT_SOUNDALIKES.get(stem, ()):
+        if any(w.startswith(alt) and w[len(alt) :] in SOUNDALIKE_ENDINGS for w in words):
+            return True
+    n = len(stem)
+    if n < FUZZY_MIN_STEM or not stem.isalpha():
+        return False
+    budget = 1 if n >= FUZZY_EDIT_MIN_STEM else 0
+    folded_max = FUZZY_MAX_FOLDED_SHORT if n == FUZZY_MIN_STEM else FUZZY_MAX_FOLDED
+    target = stem.translate(_FOLD)
+    for w in words:
+        for k in (n - 1, n, n + 1):
+            if k > len(w):
+                continue
+            raw = w[:k]
+            p = raw.translate(_FOLD)
+            if (
+                p[0] == target[0]
+                and p[-1] == target[-1]
+                and _levenshtein(p, target) <= budget
+                and _levenshtein(raw, stem) <= budget + folded_max
+            ):
+                return True
+    return False
+
+
+def match_groups(
+    text: str, groups: list[list[str]], *, fuzzy: bool = False
+) -> tuple[int, list[list[str]]]:
+    """Группа синонимов (корней) упомянута, если в тексте есть хотя бы один её корень.
+
+    `fuzzy` — для текста из распознавания речи (доклад руководителю): корень засчитывается
+    и с типичной ошибкой STT. Набранный текст (комментарии) сверяется строго — только шаг 2.
+    Тот же алгоритм во фронте (`frontend/src/domain/text.ts`) — переносить один в один:
+
+    1. Нормализация текста и корня — `normalize`; слова — части текста по пробелу.
+    2. Точно: корень — подстрока нормализованного текста.
+    3. Созвучия (только fuzzy): корень есть в `STT_SOUNDALIKES` и какое-то слово — ровно
+       замена плюс окончание из `SOUNDALIKE_ENDINGS`: «лифт» ← «листе»; «лист», «листа»,
+       «листок», «листовка» — нет (это бумага, а STT слышит именно «в листе»).
+    4. Свёртка (только fuzzy, корни из ≥5 букв и только из букв). Свернуть — заменить
+       з→с, о→а, е→и, я→и (почему только их — у `_FOLD`). L — длина корня, правки — расстояние
+       Левенштейна, допуск: 0 правок при L ≤ 7, 1 правка при L ≥ 8. Для каждого слова и
+       k ∈ {L−1, L, L+1}, k ≤ длины слова, префикс P = первые k букв слова засчитывается, если
+       одновременно:
+       а) первая и последняя буквы свёрнутого P совпадают со свёрнутым корнем — правка внутри
+          корня, а не обрезанный или чужой конец («сигнализат…» ≠ «сигнализац»);
+       б) правки(свёрнутый P, свёрнутый корень) ≤ допуск;
+       в) правки(P, корень) без свёртки ≤ допуск + F, F = 1 при L = 5 и 2 при L ≥ 6: свёртка
+          прощает звуки, но не любое их число («мошенничество» ≠ «машин»).
+       Почему так: при L = 7 одна правка превращала «автомат…» в «автомоб» (а обрезанный на
+       букву префикс с правкой — это любое слово с тем же началом), поэтому правка — только
+       для длинных корней и только внутри них. Пропуск буквы в корнях из 6–7 букв («копус» →
+       «корпус») тоже не прощается: по словам из репозитория он даёт ложные совпадения
+       («подала» → «подвал», «материал» → «мастер»), а «корпус» не корень доклада: адрес
+       в докладе — улица или номер дома.
+       Да: «состревание», «застрял», «застриване» → «застре»; «кирафоградская»,
+       «кировградская» → «кировоградск». Нет: «застройщик», «автоматика», «коричневая»,
+       «сигнализатор», «отрезали», «мошенничество». Корни короче 5 букв и с цифрами («19»,
+       «кп») — шаги 2–3.
+
+    Все кейсы — `tests/data/fuzzy_roots.json` (общие для бэкенда и фронта).
+    """
     t = normalize(text)
-    missing = [g for g in groups if not any(normalize(stem) in t for stem in g)]
+    words = t.split(" ") if fuzzy else []
+
+    def hit(stem: str) -> bool:
+        s = normalize(stem)
+        return s in t or (fuzzy and _fuzzy_hit(words, s))
+
+    missing = [g for g in groups if not any(hit(stem) for stem in g)]
     return len(groups) - len(missing), missing
 
 
@@ -189,7 +291,11 @@ def extract_facts(
     last_t = (finished or (events[-1] if events else {})).get("t", 0) or 0
     calls = [e for e in events if e.get("kind") == "call_ended"]
     chief_calls = [c for c in calls if c.get("contactId") in chief_ids] if chief_ids else calls
-    report = " ".join(c.get("transcript") or "" for c in chief_calls).strip() or fallback_report
+    report = " ".join(c.get("transcript") or "" for c in chief_calls).strip()
+    if not events:
+        # старый клиент без журнала; с журналом заметки — расшифровки всех звонков,
+        # и пустой доклад руководителю засчитывался бы по звонку в УК (фронт так не считает)
+        report = fallback_report
     total = last_t / 1000 if last_t else (total_sec_hint or 0)
     return Facts(
         path=[e["status"] for e in sets],
@@ -291,12 +397,16 @@ def evaluate_rules(
     hit, missing = match_groups(" ".join(facts.comments), comment_groups)
     total = len(comment_groups)
     pts = mx if total == 0 else round(hit / total * mx)
+    # неполный комментарий — это про отказ или про ход работ, а не «профильные происшествия»:
+    # иначе при верном «Принята» рекомендация упрекала бы в отказе от профильного вызова
     skill = (
         "refusal_comment"
         if "refusal_comment" in skills
         else "work_progress"
         if "work_progress" in skills
-        else "profile"
+        else "refusal_comment"
+        if want in COMMENT_REQUIRED
+        else "work_progress"
     )
     if total == 0:
         detail = "Особых требований к тексту нет"
@@ -353,7 +463,8 @@ def evaluate_rules(
     elif not facts.called_chief:
         pts, detail = 0, "Не было доклада руководителю смены"
     else:
-        hit, missing = match_groups(facts.report, report_groups)
+        # доклад звучит по телефону и приходит из распознавания речи — корни нечётко
+        hit, missing = match_groups(facts.report, report_groups, fuzzy=True)
         pts = 4 + round(hit / (len(report_groups) or 1) * 6)
         detail = (
             "В докладе не прозвучало: " + ", ".join(f"«{g[0]}…»" for g in missing)

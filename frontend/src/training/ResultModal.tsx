@@ -1,8 +1,11 @@
 import { useState, type ReactNode } from 'react';
-import { useDb } from '../api/db';
+import { useAllScenarios } from '../store/serverScenarios';
+import { DEFAULT_NORMS } from '../domain/evaluate';
 import { SKILL_LABELS } from '../domain/skills';
 import type { CardResult } from '../store/training';
 import { cx } from '../ui/cx';
+import { scoreBadge, serverStatusLine } from './serverScore';
+import { useServerScore } from './useServerScore';
 
 /*
  * Разбор после карточки — в стиле модальных окон АРМ («Список оповещаемых служб»):
@@ -14,7 +17,8 @@ const orangeBtn = 'h-10 border border-arm-orange bg-white px-4 text-[15px] text-
 
 export function ResultModal({ result, isLast, onNext }: { result: CardResult; isLast: boolean; onNext: () => void }) {
   const [showRef, setShowRef] = useState(false);
-  const scenarios = useDb((s) => s.db.scenarios);
+  const scenarios = useAllScenarios();
+  const server = useServerScore(result.serverCardId);
   const ev = result.evaluation;
   const sc = result.scenario;
 
@@ -38,6 +42,7 @@ export function ResultModal({ result, isLast, onNext }: { result: CardResult; is
 
   const next = ev.recommendation.nextScenarioId ? scenarios.find((s) => s.id === ev.recommendation.nextScenarioId) : undefined;
   const sec = (v: number | null) => (v === null ? '—' : `${Math.round(v)} с`);
+  const badge = scoreBadge(ev, server, !!result.fromServer, result.passScore ?? DEFAULT_NORMS.passScore);
 
   return (
     <Overlay width={900}>
@@ -46,10 +51,17 @@ export function ResultModal({ result, isLast, onNext }: { result: CardResult; is
           <div className="text-[12px] text-arm-muted">Разбор карточки</div>
           <h3 className="text-[24px] leading-tight font-bold">{sc.title}</h3>
           <p className="mt-1 text-[14px]">{ev.summary}</p>
+          {result.fromServer && (
+            // итог по серверному занятию ставит сервер: одна цифра, а разбор ниже — по правилам
+            <p className="mt-1 text-[12px] text-arm-muted">
+              Разбор ниже — по правилам тренажёра: {ev.score} из 100, {ev.passed ? 'зачёт' : 'незачёт'}.{' '}
+              {serverStatusLine(result.sendFailed, server)}
+            </p>
+          )}
         </div>
-        <div className={cx('flex w-[110px] shrink-0 flex-col items-center justify-center text-white', ev.passed ? 'bg-arm-dark' : 'bg-[#ff0000]')}>
-          <span className="text-[36px] leading-none font-bold">{ev.score}</span>
-          <span className="mt-1 text-[11px]">{ev.passed ? 'зачёт' : 'незачёт'} · из 100</span>
+        <div className={cx('flex w-[110px] shrink-0 flex-col items-center justify-center text-center text-white', badge.passed ? 'bg-arm-dark' : 'bg-[#ff0000]')}>
+          <span className="text-[36px] leading-none font-bold">{badge.score}</span>
+          <span className="mt-1 px-1 text-[11px]">{badge.label} · из 100</span>
         </div>
       </header>
 

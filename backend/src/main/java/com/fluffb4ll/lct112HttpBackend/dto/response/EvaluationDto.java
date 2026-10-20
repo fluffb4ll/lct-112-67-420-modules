@@ -1,5 +1,6 @@
 package com.fluffb4ll.lct112HttpBackend.dto.response;
 
+import com.fluffb4ll.lct112HttpBackend.config.AiEvaluationExecutorConfig;
 import com.fluffb4ll.lct112HttpBackend.entity.EvaluationEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.AiEvaluationStatus;
 
@@ -26,9 +27,14 @@ public record EvaluationDto(
 ) {
     /**
      * PENDING дольше этого срока — запуск оборвался (рестарт бэкенда посреди вызова ИИ).
-     * С запасом больше таймаута чтения ИИ (app.ai.read-timeout-ms, 90 с).
+     * Ручной перезапуск ставит PENDING до постановки в пул, и задача может простоять в полной очереди
+     * (автооценка захватывает строку уже в потоке пула). Поэтому порог — не таймаут одного вызова,
+     * а худший путь через очередь ({@link AiEvaluationExecutorConfig#MAX_QUEUED_RUN_DURATION}, ≈23 мин)
+     * с запасом: раньше живой запуск в очереди считался бы зависшим, и второй захват запустил бы
+     * второй вызов ИИ на ту же карточку.
      */
-    static final Duration STALE_PENDING_AFTER = Duration.ofMinutes(5);
+    public static final Duration STALE_PENDING_AFTER =
+            AiEvaluationExecutorConfig.MAX_QUEUED_RUN_DURATION.plus(Duration.ofMinutes(3));
 
     public static EvaluationDto fromEntity(EvaluationEntity entity) {
         if (entity == null) {
@@ -52,6 +58,16 @@ public record EvaluationDto(
         );
     }
 
+    /** Оценка ИИ по карточке идёт прямо сейчас: PENDING, ещё не зависший */
+    public static boolean isAiRunning(EvaluationEntity entity) {
+        return entity.getAiStatus() == AiEvaluationStatus.PENDING && !isStalePending(entity);
+    }
+
+    private static boolean isStalePending(EvaluationEntity entity) {
+        return entity.getUpdatedAt() != null
+                && entity.getUpdatedAt().isBefore(OffsetDateTime.now().minus(STALE_PENDING_AFTER));
+    }
+
     /**
      * Статус оценки ИИ. Неудачный перезапуск ставит UNAVAILABLE, но прежние поля ИИ не стирает —
      * преподаватель видит и старую оценку, и то, что последняя попытка не удалась.
@@ -59,8 +75,7 @@ public record EvaluationDto(
      * Зависший PENDING отдаётся как UNAVAILABLE, чтобы «ИИ оценивает…» не висело вечно.
      */
     private static AiEvaluationStatus aiStatusOf(EvaluationEntity entity) {
-        if (entity.getAiStatus() == AiEvaluationStatus.PENDING && entity.getUpdatedAt() != null
-                && entity.getUpdatedAt().isBefore(OffsetDateTime.now().minus(STALE_PENDING_AFTER))) {
+        if (entity.getAiStatus() == AiEvaluationStatus.PENDING && isStalePending(entity)) {
             return AiEvaluationStatus.UNAVAILABLE;
         }
         if (entity.getAiStatus() != null) {

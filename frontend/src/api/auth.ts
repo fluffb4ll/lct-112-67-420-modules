@@ -7,6 +7,7 @@ import { apiFetch } from './http';
  * Вход и выход через бэкенд.
  *   POST /api/auth/login {"username","password"} → UserInfoDto в теле + httpOnly-кука AUTH_TOKEN
  *   GET  /api/auth/logout → кука удаляется, токен отзывается
+ *   GET  /api/auth/me     → UserInfoDto владельца куки, 401 без входа
  * Типы повторяют DTO бэкенда (UUID приходят строками).
  */
 
@@ -49,6 +50,12 @@ export async function logoutRequest(): Promise<void> {
   }
 }
 
+/**
+ * Кто вошёл по куке (GET /api/auth/me): кука одна на браузер, а вкладка помнит своего пользователя.
+ * 401 не уводит на страницу входа сам — решает вызывающий.
+ */
+export const meRequest = () => apiFetch<UserInfoDto>('/auth/me', { skipAuthRedirect: true });
+
 /** Права администратора с бэкенда */
 export const BACKEND_PERMISSIONS = {
   editUsers: 'ADMIN_CAN_EDIT_USERS',
@@ -69,6 +76,18 @@ const ROLE_MAP: Record<string, string> = {
   STUDENT: 'student',
   TRAINEE: 'student',
 };
+
+const ROLE_LABELS: Record<string, string> = {
+  ROLE_ADMIN: 'Администратор',
+  ROLE_TEACHER: 'Преподаватель',
+  ROLE_STUDENT: 'Обучающийся',
+};
+
+/** Роль для таблиц и карточек: технические коды не показываем пользователю. */
+export function roleLabel(role: string): string {
+  const code = role.trim().toUpperCase();
+  return ROLE_LABELS[code] ?? role;
+}
 
 export function roleIdFor(backendRole: string): string {
   const code = backendRole.trim().toUpperCase().replace(/^ROLE_/, '');

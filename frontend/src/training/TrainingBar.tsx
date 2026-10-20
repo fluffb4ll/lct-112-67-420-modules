@@ -1,5 +1,6 @@
 import { useNow } from '../app/hooks';
 import { IcMonitor, IcRun } from '../arm/icons';
+import { TERMINAL } from '../domain/statusMachine';
 import { useRun } from '../store/training';
 import { cx } from '../ui/cx';
 import { MODE_LABELS } from './labels';
@@ -60,6 +61,8 @@ export function TrainingBar({
   const active = !!cur && !cur.finishedAt;
   // завершить можно только открытую карточку — иначе оценивать нечего
   const canFinish = active && !!opened;
+  // итоговый статус карточку не закрывает — подсказываем, что дальше доклад и кнопка завершения
+  const finalSet = canFinish && !isRecord && run.events.some((e) => e.kind === 'status_set' && !!e.status && TERMINAL.includes(e.status));
 
   return (
     <div className="flex h-[56px] shrink-0 items-stretch border-b border-arm-sub bg-arm-dark text-white select-none">
@@ -88,6 +91,9 @@ export function TrainingBar({
       </div>
 
       <div className="flex shrink-0 items-center gap-2 border-l border-arm-sub px-3">
+        {finalSet && (
+          <span className="max-w-[190px] text-[11px] leading-tight text-[#dfe3e6]">итоговый статус проставлен: доложите руководителю, если нужно, и завершите карточку</span>
+        )}
         {run.mode !== 'exam' && !isRecord && (
           <button onClick={run.requestHint} disabled={!active} className={btn}>
             подсказка
@@ -101,7 +107,10 @@ export function TrainingBar({
           onClick={onFinish}
           disabled={!canFinish}
           title={active && !opened ? 'Сначала откройте карточку' : undefined}
-          className="flex h-9 items-center border border-white px-4 text-[15px] font-bold text-white hover:bg-arm-sub disabled:cursor-default disabled:border-[#aab4ba] disabled:opacity-40 disabled:hover:bg-transparent"
+          className={cx(
+            'flex h-9 items-center border border-white px-4 text-[15px] font-bold text-white hover:bg-arm-sub disabled:cursor-default disabled:border-[#aab4ba] disabled:opacity-40 disabled:hover:bg-transparent',
+            finalSet && 'border-arm-orange bg-arm-orange',
+          )}
         >
           {isRecord ? 'сохранить запись' : 'завершить карточку'}
         </button>

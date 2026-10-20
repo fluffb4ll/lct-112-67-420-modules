@@ -24,6 +24,20 @@ export const SKILL_ADVICE: Record<Skill, string> = {
   literacy: 'Пишите комментарий с заглавной буквы, без сокращений и опечаток — его читают другие службы.',
 };
 
+/**
+ * Навыки с сервера (/api/analytics: radarSkills, skillsAverage) — ключи навыков ИИ-контура, значения 0–100.
+ * Порядок как в SKILLS (HashMap на бэке порядок не держит), подписи по-русски; незнакомый ключ — в конце как есть.
+ */
+export function serverSkillBars(skills: Record<string, number> | null | undefined): { label: string; value: number }[] {
+  if (!skills) return [];
+  const known = SKILLS as string[];
+  const rank = (k: string) => (known.includes(k) ? known.indexOf(k) : known.length);
+  return Object.entries(skills)
+    .filter(([, v]) => Number.isFinite(v))
+    .sort(([a], [b]) => rank(a) - rank(b))
+    .map(([k, v]) => ({ label: SKILL_LABELS[k as Skill] ?? k, value: Math.round(v) }));
+}
+
 /** Рейтинги по навыкам + общий рейтинг (по зачёту/незачёту всех попыток — данных по нему больше всего) */
 export type SkillRatings = Record<Skill, number> & { general: number };
 

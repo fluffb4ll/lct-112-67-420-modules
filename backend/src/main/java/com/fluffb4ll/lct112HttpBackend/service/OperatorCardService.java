@@ -13,6 +13,8 @@ import com.fluffb4ll.lct112HttpBackend.entity.UserEntity;
 import com.fluffb4ll.lct112HttpBackend.model.enums.EntityType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.EventType;
 import com.fluffb4ll.lct112HttpBackend.model.enums.OperatorCardStatus;
+import com.fluffb4ll.lct112HttpBackend.model.enums.ScenarioStatus;
+import com.fluffb4ll.lct112HttpBackend.model.exceptions.ForbiddenException;
 import com.fluffb4ll.lct112HttpBackend.model.exceptions.OperatorCardException;
 import com.fluffb4ll.lct112HttpBackend.repository.EvaluationRepository;
 import com.fluffb4ll.lct112HttpBackend.repository.OperatorCardRepository;
@@ -39,6 +41,7 @@ import javax.naming.AuthenticationException;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -86,12 +89,26 @@ public class OperatorCardService {
                     currentUser.getId()
             );
             if (!isMember && !"ROLE_ADMIN".equals(currentUser.getRole().getName())) {
-                throw new OperatorCardException("User is not a member of the study group for this session");
+                throw new ForbiddenException("You do not have permission to submit to this session: not a member of its study group");
             }
         }
 
         ScenarioEntity scenario = scenarioRepository.findById(request.scenarioId())
                 .orElseThrow(() -> new OperatorCardException("Scenario not found"));
+
+        // Пустой список сценариев у занятия — «все утверждённые» (так их выдаёт поток карточек),
+        // принадлежность проверяем только при явном списке
+        UUID[] sessionScenarioIds = session.getScenarioIds();
+        if (sessionScenarioIds != null && sessionScenarioIds.length > 0
+                && !Arrays.asList(sessionScenarioIds).contains(scenario.getId())) {
+            throw new OperatorCardException("Scenario is not part of this session");
+        }
+        // Сдача только по утверждённому сценарию. Карточку, выданную до архивации, тоже не принимаем:
+        // начало карточки сервер не фиксирует (startedAt присылает клиент), а поток карточек
+        // перестаёт выдавать архивный сценарий сразу — архивация означает, что сценарий отозван.
+        if (scenario.getStatus() != ScenarioStatus.APPROVED) {
+            throw new OperatorCardException("Scenario is not approved, card cannot be submitted");
+        }
 
         OffsetDateTime startedAt = request.startedAt() != null ? request.startedAt() : session.getStartedAt();
         OffsetDateTime submittedAt = request.submittedAt() != null ? request.submittedAt() : OffsetDateTime.now();
@@ -188,7 +205,7 @@ public class OperatorCardService {
         boolean isAdmin = currentUser.getRole() != null && "ROLE_ADMIN".equals(currentUser.getRole().getName());
 
         if (!isOwner && !isTeacherOfSession && !isAdmin) {
-            throw new AuthenticationException("You do not have permission to view this card");
+            throw new ForbiddenException("You do not have permission to view this card");
         }
 
         EvaluationEntity evaluation = evaluationRepository.findByCardId(cardId).orElse(null);
