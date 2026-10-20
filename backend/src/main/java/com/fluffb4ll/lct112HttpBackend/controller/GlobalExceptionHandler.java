@@ -43,6 +43,12 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(400).body(response);
     }
 
+    @ExceptionHandler(DepartmentException.class)
+    public ResponseEntity<ErrorResponseDto> processDepartmentError(DepartmentException e) {
+        ErrorResponseDto response = new ErrorResponseDto(e.getMessage());
+        return ResponseEntity.status(400).body(response);
+    }
+
     @ExceptionHandler(CategoryException.class)
     public ResponseEntity<ErrorResponseDto> processCategoryError(CategoryException e) {
         ErrorResponseDto response = new ErrorResponseDto(e.getMessage());

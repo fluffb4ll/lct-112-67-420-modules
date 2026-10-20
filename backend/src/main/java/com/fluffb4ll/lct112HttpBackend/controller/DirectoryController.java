@@ -1,7 +1,6 @@
 package com.fluffb4ll.lct112HttpBackend.controller;
 
 import com.fluffb4ll.lct112HttpBackend.dto.response.RoleDto;
-import com.fluffb4ll.lct112HttpBackend.dto.response.UserInfoDto;
 import com.fluffb4ll.lct112HttpBackend.service.DirectoryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -25,12 +24,5 @@ public class DirectoryController {
             @CookieValue(name = "AUTH_TOKEN") String token
     ) throws AuthenticationException {
         return ResponseEntity.ok().body(directoryService.getRoles(UUID.fromString(token)));
-    }
-
-    @GetMapping("/departments")
-    public ResponseEntity<List<UserInfoDto.DepartmentDto>> getDepartments(
-            @CookieValue(name = "AUTH_TOKEN") String token
-    ) throws AuthenticationException {
-        return ResponseEntity.ok().body(directoryService.getDepartments(UUID.fromString(token)));
     }
 }

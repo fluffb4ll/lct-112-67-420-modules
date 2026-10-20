@@ -239,22 +239,29 @@ export function Softphone() {
         : /аварийн|бригад|дежурн/i.test(st.peer.title)
           ? 'emergency'
           : 'other';
-    const reply = await dialogueReply({
-      role: st.peer.title,
-      roleKey,
-      said: transcript,
-      fallback: template,
-      card: {
-        address: card ? `${card.address.street}, ${card.address.house}` : '',
-        incident: card?.type.finalType ?? '',
-        description: card?.descriptions.map((d) => d.text).join(' ') ?? '',
-        victims: !!card?.flags.victims,
-      },
-      history: st.lines,
-    }).then(
-      (r) => r.reply,
-      () => template,
-    );
+    // ответ пишет модель, и это тоже не время обучающегося: таймер карточки стоит, пока ждём
+    useRun.getState().pauseClock(true);
+    let reply: string;
+    try {
+      reply = await dialogueReply({
+        role: st.peer.title,
+        roleKey,
+        said: transcript,
+        fallback: template,
+        card: {
+          address: card ? `${card.address.street}, ${card.address.house}` : '',
+          incident: card?.type.finalType ?? '',
+          description: card?.descriptions.map((d) => d.text).join(' ') ?? '',
+          victims: !!card?.flags.victims,
+        },
+        history: st.lines,
+      }).then(
+        (r) => r.reply,
+        () => template,
+      );
+    } finally {
+      useRun.getState().pauseClock(false);
+    }
     if (!live()) return;
     sp.patch({
       phase: 'reply',
