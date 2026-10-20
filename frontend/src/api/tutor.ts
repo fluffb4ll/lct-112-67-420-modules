@@ -56,9 +56,22 @@ export function peerReply(peer: CallPeer, _number: string, transcript: string, s
 
   if (repeat) return peer.isChief ? 'Это вы мне уже докладывали. Работайте по карточке, о результате доложите отдельно.' : 'Так вы это уже передавали. Мы приняли, работаем.';
 
+  // адрес назван, но не тот: собеседник должен сказать именно это, а не просить назвать адрес
+  const wrongAddress = !hasAddress && (/\d/.test(text) || /улиц|\bул\b|проспект|переул|шоссе|бульвар|проезд|набережн/i.test(text));
+  const cardAddress = scenario ? `${scenario.incident.address.street}, ${scenario.incident.address.house}` : '';
+
+  // Сторонняя организация (номер из справочника): заявку принимает, но докладывать нам не будет —
+  // происшествие уходит из нашей зоны вместе с карточкой
+  if (peer.contactId.startsWith('dir:')) {
+    if (short) return 'Говорите по существу: адрес и что произошло.';
+    if (!hasAddress) return 'Адрес повторите, я записываю.';
+    return 'Информацию принял, заявку зарегистрировали. Дальше это наша зона, работаем сами.';
+  }
+
   // Руководитель смены и его заместитель: спрашивают недостающее, потом дают указание
   if (peer.isChief) {
     if (short) return 'Докладывайте подробнее: адрес, что случилось, есть ли пострадавшие.';
+    if (wrongAddress && cardAddress) return `Адрес не сходится: у меня в карточке ${cardAddress}. Сверьтесь и доложите ещё раз.`;
     if (!hasAddress) return 'Адрес назовите полностью — улица, дом, подъезд. С него и начинайте доклад.';
     const order = scenario?.chiefReply?.trim();
     const lead = hasVictims ? 'Понял, люди на месте — это в первую очередь. ' : 'Понял вас. ';
@@ -68,6 +81,7 @@ export function peerReply(peer: CallPeer, _number: string, transcript: string, s
   // Мастер участка и аварийная служба: принимают заявку и говорят, что будут делать
   const isEmergency = /аварийн|бригад|дежурн/i.test(peer.title);
   if (short) return isEmergency ? 'Не понял, повторите: адрес и что произошло.' : 'Поподробнее, пожалуйста: куда ехать и что там?';
+  if (wrongAddress && cardAddress) return `Такой заявки у нас нет. В карточке ${cardAddress} — вы по ней звоните?`;
   if (!hasAddress) return isEmergency ? 'Адрес уточните, по нему и выезжаем.' : 'Адрес не расслышал, назовите ещё раз.';
   if (hasVictims) return isEmergency ? 'Принял, люди внутри — выезжаем немедленно, о прибытии доложу.' : 'Принял, раз там люди — отправляю бригаду сейчас же, доложу с места.';
   return isEmergency ? 'Заявку принял, бригада выезжает. Как прибудем — доложу.' : 'Принял, направляю рабочих. О ходе работ сообщу.';
